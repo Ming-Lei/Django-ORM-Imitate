@@ -26,16 +26,20 @@ class Expr(object):
         _params.extend(self.params)
         sql = 'update %s set %s %s;' % (
             self.model.db_table, ', '.join([key + ' = %s' for key in _keys]), self.where_expr)
-        return Database.execute(sql, _params)
+        return Database.execute(self.model.db_label, sql, _params)
 
     def limit(self, rows, offset=None):
         self.where_expr += ' limit %s%s' % (
             '%s, ' % offset if offset is not None else '', rows)
         return self
 
+    def order_by(self, field, order='asc'):
+        self.where_expr += ' order by %s %s ' % (field, order)
+        return self
+
     def select(self):
         sql = 'select %s from %s %s;' % (', '.join(self.model.fields.keys()), self.model.db_table, self.where_expr)
-        for row in Database.execute(sql, self.params).fetchall():
+        for row in Database.execute(self.model.db_label, sql, self.params).fetchall():
             inst = self.model()
             for idx, f in enumerate(row):
                 setattr(inst, self.model.fields.keys()[idx], f)
@@ -43,7 +47,7 @@ class Expr(object):
 
     def count(self):
         sql = 'select count(*) from %s %s;' % (self.model.db_table, self.where_expr)
-        (row_cnt, ) = Database.execute(sql, self.params).fetchone()
+        (row_cnt,) = Database.execute(self.model.db_label, sql, self.params).fetchone()
         return row_cnt
 
 
@@ -67,7 +71,7 @@ class Model(object):
     def save(self):
         insert = 'insert ignore into %s(%s) values (%s);' % (
             self.db_table, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
-        return Database.execute(insert, self.__dict__.values())
+        return Database.execute(self.db_label, insert, self.__dict__.values())
 
     @classmethod
     def where(cls, **kwargs):
@@ -76,37 +80,39 @@ class Model(object):
 
 class Database(object):
     autocommit = True
-    conn = None
+    conn = {}
     db_config = {}
 
     @classmethod
-    def connect(cls, **db_config):
-        cls.conn = MySQLdb.connect(host=db_config.get('host', 'localhost'), port=int(db_config.get('port', 3306)),
-                                   user=db_config.get('user', 'root'), passwd=db_config.get('password', ''),
-                                   db=db_config.get('database', 'test'), charset=db_config.get('charset', 'utf8'))
-        cls.conn.autocommit(cls.autocommit)
-        cls.db_config.update(db_config)
+    def connect(cls, **databases):
+        for db_label, db_config in databases.items():
+            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'), port=int(db_config.get('port', 3306)),
+                                                 user=db_config.get('user', 'root'), passwd=db_config.get('password', ''),
+                                                 db=db_config.get('database', 'test'), charset=db_config.get('charset', 'utf8'))
+            cls.conn[db_label].autocommit(cls.autocommit)
+        cls.db_config.update(databases)
 
     @classmethod
-    def get_conn(cls):
-        if not cls.conn or not cls.conn.open:
+    def get_conn(cls, db_label):
+        if not cls.conn[db_label] or not cls.conn[db_label].open:
             cls.connect(**cls.db_config)
         try:
-            cls.conn.ping()
+            cls.conn[db_label].ping()
         except MySQLdb.OperationalError:
             cls.connect(**cls.db_config)
-        return cls.conn
+        return cls.conn[db_label]
 
     @classmethod
-    def execute(cls, *args):
-        cursor = cls.get_conn().cursor()
+    def execute(cls, db_label, *args):
+        cursor = cls.get_conn(db_label).cursor()
         cursor.execute(*args)
         return cursor
 
     def __del__(self):
-        if self.conn and self.conn.open:
-            self.conn.close()
+        for _, conn in self.conn:
+            if conn and conn.open:
+                conn.close()
 
 
-def execute_raw_sql(sql, params=None):
-    return Database.execute(sql, params) if params else Database.execute(sql)
+def execute_raw_sql(db_label, sql, params=None):
+    return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)

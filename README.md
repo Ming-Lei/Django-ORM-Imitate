@@ -10,11 +10,13 @@ Connect to MySQL
 from data_handler import Database
 
 db_config = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'root',
-    'password': '123456',
-    'database': 'test'
+    'default': {
+        'host': 'localhost',
+        'port': 3306,
+        'user': 'root',
+        'password': '123456',
+        'database': 'test'
+    }
 }
 Database.connect(**db_config)
 ```
@@ -27,6 +29,7 @@ from data_handler import Model, Field
 
 class TestModel(Model):
   db_table = 'test'
+  db_label = 'default'
   a = Field()
   b = Field()
 ```
@@ -70,7 +73,7 @@ Execute raw SQL
 ```python
 from data_handler import execute_raw_sql
 
-results = execute_raw_sql('select b, count(*) from test where b = %s group by b;', (1,))
+results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
 for val, cnt in results:
   print val, cnt
 ```
