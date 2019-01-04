@@ -45,6 +45,16 @@ class Expr(object):
                 setattr(inst, self.model.fields.keys()[idx], f)
             yield inst
 
+    def first(self):
+        sql = 'select %s from %s %s;' % (', '.join(self.model.fields.keys()), self.model.db_table, self.where_expr)
+        row = Database.execute(self.model.db_label, sql, self.params).fetchone()
+        if row:
+            inst = self.model()
+            for idx, f in enumerate(row):
+                setattr(inst, self.model.fields.keys()[idx], f)
+            return inst
+        return None
+
     def count(self):
         sql = 'select count(*) from %s %s;' % (self.model.db_table, self.where_expr)
         (row_cnt,) = Database.execute(self.model.db_label, sql, self.params).fetchone()

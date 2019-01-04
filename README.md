@@ -53,6 +53,13 @@ for r in TestModel.where(a=5, b='john').select():
   print r.b
 ```
 
+```python
+r = TestModel.where(a=5, b='john').first():
+if r:
+  print r.a
+  print r.b
+```
+
 Count
 -----
 

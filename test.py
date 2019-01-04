@@ -32,6 +32,13 @@ for r in TestModel.where(a='john', b=3).limit(1, offset=2).select():
     print r.a
     print r.b
 
+# first
+r = TestModel.where(a='john', b=3).limit(1, offset=2).first()
+if r:
+    print type(r)
+    print r.a
+    print r.b
+
 # update
 TestModel.where(a='john', b=3).update(b=1)
 
