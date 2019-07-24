@@ -60,6 +60,10 @@ class Expr(object):
         (row_cnt,) = Database.execute(self.model.db_label, sql, self.params).fetchone()
         return row_cnt
 
+    def raw_sql(self, sql):
+        self.where_expr += sql
+        return self
+
 
 class MetaModel(type):
     db_table = None
@@ -77,6 +81,17 @@ class MetaModel(type):
 
 class Model(object):
     __metaclass__ = MetaModel
+
+    def __init__(self, **kw):
+        for k,v in kw.items():
+            setattr(self, k, v)
+
+    def __eq__(self, obj):
+        return cmp(self.__dict__, obj.__dict__) == 0
+
+    def __hash__(self):
+        kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
+        return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
 
     def save(self):
         insert = 'insert ignore into %s(%s) values (%s);' % (
