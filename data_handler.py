@@ -1,5 +1,5 @@
 # coding: utf-8
-
+import json
 import MySQLdb
 
 
@@ -83,15 +83,14 @@ class Model(object):
     __metaclass__ = MetaModel
 
     def __init__(self, **kw):
-        for k,v in kw.items():
+        for k, v in kw.items():
             setattr(self, k, v)
 
     def __eq__(self, obj):
-        return cmp(self.__dict__, obj.__dict__) == 0
+        return self.__class__ == obj.__class__ and cmp(self.__dict__, obj.__dict__) == 0
 
     def __hash__(self):
-        kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
-        return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
+        return hash(json.dumps(self.__dict__) + str(self.__class__))
 
     def save(self):
         insert = 'insert ignore into %s(%s) values (%s);' % (
@@ -111,9 +110,12 @@ class Database(object):
     @classmethod
     def connect(cls, **databases):
         for db_label, db_config in databases.items():
-            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'), port=int(db_config.get('port', 3306)),
-                                                 user=db_config.get('user', 'root'), passwd=db_config.get('password', ''),
-                                                 db=db_config.get('database', 'test'), charset=db_config.get('charset', 'utf8'))
+            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'),
+                                                 port=int(db_config.get('port', 3306)),
+                                                 user=db_config.get('user', 'root'),
+                                                 passwd=db_config.get('password', ''),
+                                                 db=db_config.get('database', 'test'),
+                                                 charset=db_config.get('charset', 'utf8'))
             cls.conn[db_label].autocommit(cls.autocommit)
         cls.db_config.update(databases)
 
