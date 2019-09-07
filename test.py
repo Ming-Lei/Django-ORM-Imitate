@@ -28,16 +28,16 @@ test.save()
 
 # select
 for r in TestModel.where(a='john', b=3).limit(1, offset=2).select():
-    print type(r)
-    print r.a
-    print r.b
+    print(type(r))
+    print(r.a)
+    print(r.b)
 
 # first
 r = TestModel.where(a='john', b=3).limit(1, offset=2).first()
 if r:
-    print type(r)
-    print r.a
-    print r.b
+    print(type(r))
+    print(r.a)
+    print(r.b)
 
 # update
 TestModel.where(a='john', b=3).update(b=1)
@@ -45,4 +45,4 @@ TestModel.where(a='john', b=3).update(b=1)
 # execute raw sql
 results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
 for val, cnt in results:
-    print val, cnt
+    print(val, cnt)

@@ -18,7 +18,7 @@ class Expr(object):
     def update(self, **kwargs):
         _keys = []
         _params = []
-        for key, val in kwargs.iteritems():
+        for key, val in kwargs.items():
             if val is None or key not in self.model.fields:
                 continue
             _keys.append(key)
@@ -38,20 +38,22 @@ class Expr(object):
         return self
 
     def select(self):
-        sql = 'select %s from %s %s;' % (', '.join(self.model.fields.keys()), self.model.db_table, self.where_expr)
+        fields_list = list(self.model.fields.keys())
+        sql = 'select %s from %s %s;' % (', '.join(fields_list), self.model.db_table, self.where_expr)
         for row in Database.execute(self.model.db_label, sql, self.params).fetchall():
             inst = self.model()
             for idx, f in enumerate(row):
-                setattr(inst, self.model.fields.keys()[idx], f)
+                setattr(inst, fields_list[idx], f)
             yield inst
 
     def first(self):
-        sql = 'select %s from %s %s;' % (', '.join(self.model.fields.keys()), self.model.db_table, self.where_expr)
+        fields_list = list(self.model.fields.keys())
+        sql = 'select %s from %s %s;' % (', '.join(fields_list), self.model.db_table, self.where_expr)
         row = Database.execute(self.model.db_label, sql, self.params).fetchone()
         if row:
             inst = self.model()
             for idx, f in enumerate(row):
-                setattr(inst, self.model.fields.keys()[idx], f)
+                setattr(inst, fields_list[idx], f)
             return inst
         return None
 
@@ -72,22 +74,35 @@ class MetaModel(type):
     def __init__(cls, name, bases, attrs):
         super(MetaModel, cls).__init__(name, bases, attrs)
         fields = {}
-        for key, val in cls.__dict__.iteritems():
+        for key, val in cls.__dict__.items():
             if isinstance(val, Field):
                 fields[key] = val
         cls.fields = fields
         cls.attrs = attrs
 
 
-class Model(object):
-    __metaclass__ = MetaModel
+def with_metaclass(meta, *bases):
+    # 兼容2和3的元类  见 py2 future.utils.with_metaclass
+    class metaclass(meta):
+        __call__ = type.__call__
+        __init__ = type.__init__
+
+        def __new__(cls, name, this_bases, d):
+            if this_bases is None:
+                return type.__new__(cls, name, (), d)
+            return meta(name, bases, d)
+
+    return metaclass('temporary_class', None, {})
+
+
+class Model(with_metaclass(MetaModel, dict)):
 
     def __init__(self, **kw):
         for k, v in kw.items():
             setattr(self, k, v)
 
     def __eq__(self, obj):
-        return self.__class__ == obj.__class__ and cmp(self.__dict__, obj.__dict__) == 0
+        return self.__class__ == obj.__class__ and self.__dict__ == obj.__dict__
 
     def __hash__(self):
         return hash(json.dumps(self.__dict__) + str(self.__class__))
