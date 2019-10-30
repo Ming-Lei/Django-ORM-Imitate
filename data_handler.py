@@ -3,11 +3,13 @@ import json
 import MySQLdb
 
 
-class Field(object):
-    pass
+class Field():
+
+    def __nonzero__(self):
+        return False
 
 
-class Expr(object):
+class Expr():
     def __init__(self, model, kwargs):
         self.model = model
         # How to deal with a non-dict parameter?
@@ -101,6 +103,9 @@ class Model(with_metaclass(MetaModel, dict)):
         for k, v in kw.items():
             setattr(self, k, v)
 
+    def __nonzero__(self):
+        return bool(self.__dict__)
+
     def __eq__(self, obj):
         return self.__class__ == obj.__class__ and self.__dict__ == obj.__dict__
 
@@ -117,7 +122,7 @@ class Model(with_metaclass(MetaModel, dict)):
         return Expr(cls, kwargs)
 
 
-class Database(object):
+class Database():
     autocommit = True
     conn = {}
     db_config = {}
