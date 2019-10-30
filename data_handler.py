@@ -8,6 +8,9 @@ class Field():
     def __nonzero__(self):
         return False
 
+    def __bool__(self):
+        return False
+
 
 class Expr():
     def __init__(self, model, kwargs):
@@ -104,6 +107,9 @@ class Model(with_metaclass(MetaModel, dict)):
             setattr(self, k, v)
 
     def __nonzero__(self):
+        return bool(self.__dict__)
+
+    def __bool__(self):
         return bool(self.__dict__)
 
     def __eq__(self, obj):
