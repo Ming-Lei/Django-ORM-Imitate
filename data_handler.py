@@ -1,5 +1,4 @@
 # coding: utf-8
-import json
 import MySQLdb
 
 
@@ -116,7 +115,8 @@ class Model(with_metaclass(MetaModel, dict)):
         return self.__class__ == obj.__class__ and self.__dict__ == obj.__dict__
 
     def __hash__(self):
-        return hash(json.dumps(self.__dict__) + str(self.__class__))
+        kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
+        return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
 
     def save(self):
         insert = 'insert ignore into %s(%s) values (%s);' % (
