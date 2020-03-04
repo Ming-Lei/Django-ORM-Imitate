@@ -26,21 +26,37 @@ test.a = 'john'
 test.b = 3
 test.save()
 
+test = TestModel()
+test.a = 'marry'
+test.b = 3
+test.save()
+
+test = TestModel()
+test.a = 'john'
+test.b = 3
+test.save()
+
+filter_result = TestModel.objects.filter(a='john', b=3)
+print(filter_result.count())
+
 # select
-for r in TestModel.where(a='john', b=3).limit(1, offset=2).select():
+for r in filter_result[1:5]:
     print(type(r))
     print(r.a)
     print(r.b)
 
 # first
-r = TestModel.where(a='john', b=3).limit(1, offset=2).first()
+r = filter_result.first()
 if r:
     print(type(r))
     print(r.a)
     print(r.b)
 
+first = filter_result[0]
+print(first == r)
+
 # update
-TestModel.where(a='john', b=3).update(b=1)
+filter_result.update(b=1)
 
 # execute raw sql
 results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
