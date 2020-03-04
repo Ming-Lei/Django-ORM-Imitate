@@ -42,36 +42,54 @@ test = TestModel()
 test.a = 5
 test.b = 'john'
 test.save()
+
+test = TestModel()
+test.a = 'marry'
+test.b = 3
+test.save()
+
+test = TestModel()
+test.a = 'john'
+test.b = 3
+test.save()
 ```
 
 Query
 -----
 
 ```python
-for r in TestModel.where(a=5, b='john').select():
-  print r.a
-  print r.b
+filter_result = TestModel.objects.filter(a='john', b=3)
+# select
+for r in filter_result[1:5]:
+    print(type(r))
+    print(r.a)
+    print(r.b)
 ```
 
 ```python
-r = TestModel.where(a=5, b='john').first():
+# first
+r = filter_result.first()
 if r:
-  print r.a
-  print r.b
+    print(type(r))
+    print(r.a)
+    print(r.b)
+
+first = filter_result[0]
+print(first == r)
 ```
 
 Count
 -----
 
 ```python
-print TestModel.where(a=5, b='john').count()
+print(filter_result.count())
 ```
 
 Update
 ------
 
 ```python
-TestModel.where(a=5, b='john').update(a=1)
+filter_result.update(b=1)
 ```
 
 Execute raw SQL
@@ -82,5 +100,5 @@ from data_handler import execute_raw_sql
 
 results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
 for val, cnt in results:
-  print val, cnt
+  print(val, cnt)
 ```
