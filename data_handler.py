@@ -1,9 +1,9 @@
 # coding: utf-8
-import copy
 import MySQLdb
 # py2 mysql-python  py3 mysqlclient
 
 
+# 数据库调用
 class Database():
     autocommit = True
     conn = {}
@@ -47,6 +47,7 @@ def execute_raw_sql(db_label, sql, params=None):
     return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
 
 
+# 可重复的迭代器
 class SqlIterator():
     def __init__(self, data, model):
         self.data = data
@@ -66,6 +67,7 @@ class SqlIterator():
         else:
             value = self.data[self.ind]
             self.ind += 1
+            # 返回实例化的model对象
             inst = self.model(**dict(zip(self.fields_list, value)))
             return inst
 
@@ -73,67 +75,73 @@ class SqlIterator():
 class QuerySet():
     def __init__(self, model):
         self.model = model
+        self.fields_list = list(self.model.fields.keys())
+
         self.filter_dict = {}
         self.exclude_dict = {}
         self.order_fields = []
         self.limit_dict = {}
+
         self.select_result = None
         self.select_count = None
-        self.fields_list = list(self.model.fields.keys())
 
+    # filter函数，返回一个新的QuerySet对象
     def filter(self, **kwargs):
         return self.new(filter_dict=kwargs)
 
+    # exclude函数，返回一个新的QuerySet对象
     def exclude(self, **kwargs):
         return self.new(exclude_dict=kwargs)
     
+    # first
     def first(self):
         if self.select_result is None:
+            # 没有查询结果 使用fetchone获取第一个
             sql, params = self.sql_expr()
             value = Database.execute(self.model.db_label, sql, params).fetchone()
         else:
+            # 有查询结果 直接返回第一个
             value = self.select_result[0] if self.select_result else None
         if value:
+            # 返回实例化的model对象
             inst = self.model(**dict(zip(self.fields_list, value)))
             return inst
         return None
 
+    # count
     def count(self):
         if self.select_count is None:
-            sql, params = self.sql_expr(count=True)
-            (select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
-            limit = self.limit_dict.get('limit')
-            offset = self.limit_dict.get('offset', 0)
-            
-            if not limit and offset > select_count:
-                self.select_count = 0
-            elif not limit and offset < select_count:
-                self.select_count = select_count - offset
-            elif limit is not None and limit + offset > select_count:
-                self.select_count = select_count - offset
-            elif limit is not None and limit + offset <= select_count:
-                self.select_count = limit
-
-            return self.select_count
+            if self.limit_dict:
+                # 有数量限制，取得查询结果的长度
+                self.select()
+                self.select_count = len(self.select_result)
+            else:
+                # 无数量限制，使用count查询
+                sql, params = self.sql_expr(count=True)
+                (self.select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
         return self.select_count
     
+    # update
     def update(self, **kwargs):
         if kwargs:
             sql, params = self.sql_expr(update_dict=kwargs)
             Database.execute(self.model.db_label, sql, params)
-        
 
+    # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         return self.new(order_fields=args)
     
+    # exists
     def exists(self):
         return bool(self.count())
 
+    # sql查询基础函数
     def select(self):
         if self.select_result is None:
             sql, params = self.sql_expr()
             self.select_result = Database.execute(self.model.db_label, sql, params).fetchall()
 
+    # 根据当前筛选条件构建sql、params
     def sql_expr(self, count=False, update_dict=None):
         params = []
         where_expr = ''
@@ -166,6 +174,7 @@ class QuerySet():
             # todo 报错 无法更新
             pass
 
+        # limit加count不生效
         if not count:
             limit = self.limit_dict.get('limit')
             if limit is not None:
@@ -193,29 +202,32 @@ class QuerySet():
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
         return sql, params
 
+    # 根据传入的筛选条件，返回新的QuerySet对象
     def new(self, filter_dict={}, exclude_dict={}, limit_dict={}, order_fields=None):
         new_query = QuerySet(self.model)
 
-        new_query.filter_dict = copy.copy(self.filter_dict)
+        new_query.filter_dict.update(self.filter_dict)
         if filter_dict:
             new_query.filter_dict.update(filter_dict)
 
-        new_query.exclude_dict = copy.copy(self.exclude_dict)
+        new_query.exclude_dict.update(self.exclude_dict)
         if exclude_dict:
             new_query.exclude_dict.update(exclude_dict)
 
-        new_query.limit_dict = copy.copy(self.limit_dict)
+        new_query.limit_dict.update(self.limit_dict)
         if limit_dict:
             new_query.limit_dict.update(limit_dict)
         
-        new_query.order_fields = copy.copy(self.order_fields)
+        new_query.order_fields = self.order_fields[:]
         if order_fields:
             new_query.order_fields = order_fields
 
         return new_query
 
+    # 自定义切片及索引取值
     def __getitem__(self, index):
         if isinstance(index, slice):
+            # 根据当前偏移量计算新的偏移量
             start = index.start or 0
             stop = index.stop
             self_offset = self.limit_dict.get('offset', 0)
@@ -236,15 +248,19 @@ class QuerySet():
             limit_dict['offset'] = sffset
             if limit:
                 limit_dict['limit'] = limit
+            # 返回新的QuerySet对象
             return self.new(limit_dict=limit_dict)
         elif isinstance(index, int):
+            # 取得对应索引值
             self.select()
             value = self.select_result[index]
+            # 返回实例化的model对象
             inst = self.model(**dict(zip(self.fields_list, value)))
             return inst
         else:
             return None
 
+    # 返回自定义迭代器
     def __iter__(self):
         self.select()
         return SqlIterator(self.select_result, self.model)
