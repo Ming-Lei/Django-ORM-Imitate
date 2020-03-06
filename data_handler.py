@@ -84,6 +84,10 @@ class QuerySet():
 
         self.select_result = None
         self.select_count = None
+    
+    # all函数，返回一个新的QuerySet对象（无筛选条件）
+    def all(self):
+        return QuerySet(self.model)
 
     # filter函数，返回一个新的QuerySet对象
     def filter(self, **kwargs):
