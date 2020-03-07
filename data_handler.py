@@ -47,31 +47,6 @@ def execute_raw_sql(db_label, sql, params=None):
     return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
 
 
-# 可重复的迭代器
-class SqlIterator():
-    def __init__(self, data, model):
-        self.data = data
-        self.model = model
-        self.ind = 0
-        self.fields_list = list(self.model.fields.keys())
-
-    def __iter__(self):
-        return self
-    
-    def next(self):
-        return self.__next__()
-
-    def __next__(self):
-        if self.ind == len(self.data):
-            raise StopIteration
-        else:
-            value = self.data[self.ind]
-            self.ind += 1
-            # 返回实例化的model对象
-            inst = self.model(**dict(zip(self.fields_list, value)))
-            return inst
-
-
 class QuerySet():
     def __init__(self, model):
         self.model = model
@@ -267,7 +242,9 @@ class QuerySet():
     # 返回自定义迭代器
     def __iter__(self):
         self.select()
-        return SqlIterator(self.select_result, self.model)
+        for value in self.select_result:
+            inst = self.model(**dict(zip(self.fields_list, value)))
+            yield inst
     
     def __nonzero__(self):
         return bool(self.count())
