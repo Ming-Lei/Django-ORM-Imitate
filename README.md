@@ -1,9 +1,8 @@
-QuickORM
+Django ORM Imitate
 ========
 
-A simple ORM provides elegant API for Python-MySQL operation
+基于[QuickORM](https://github.com/2shou/QuickORM)开发 模仿实现Django ORM的基本操作  
 
-Connect to MySQL
 ----------------
 
 ```python

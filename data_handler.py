@@ -32,9 +32,13 @@ class Database():
         return cls.conn[db_label]
 
     @classmethod
-    def execute(cls, db_label, *args):
-        cursor = cls.get_conn(db_label).cursor()
+    def execute(cls, db_label, *args, **kwargs):
+        db_conn = cls.get_conn(db_label)
+        cursor = db_conn.cursor()
         cursor.execute(*args)
+        delete = kwargs.pop('delete', False)
+        if delete:
+            db_conn.commit()
         return cursor
 
     def __del__(self):
@@ -100,14 +104,14 @@ class QuerySet():
                 self.select_count = len(self.select_result)
             else:
                 # 无数量限制，使用count查询
-                sql, params = self.sql_expr(count=True)
+                sql, params = self.sql_expr(method='count')
                 (self.select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
         return self.select_count
     
     # update
     def update(self, **kwargs):
         if kwargs:
-            sql, params = self.sql_expr(update_dict=kwargs)
+            sql, params = self.sql_expr(method='update', update_dict=kwargs)
             Database.execute(self.model.db_label, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
@@ -118,9 +122,10 @@ class QuerySet():
     def exists(self):
         return bool(self.count())
     
-    # todo
+    # delete
     def delete(self):
-        pass
+        sql, params = self.sql_expr(method='delete')
+        Database.execute(self.model.db_label, sql, params, delete=True)
     
     # values
     def values(self, *args):
@@ -169,7 +174,7 @@ class QuerySet():
             self.select_result = Database.execute(self.model.db_label, sql, params).fetchall()
 
     # 根据当前筛选条件构建sql、params
-    def sql_expr(self, count=False, update_dict=None):
+    def sql_expr(self, method='select', update_dict=None):
         params = []
         where_expr = ''
 
@@ -202,7 +207,7 @@ class QuerySet():
             raise Error('Cannot update a query once a slice has been taken.')        
 
         # limit加count不生效
-        if not count:
+        if method != 'count':
             limit = self.limit_dict.get('limit')
             if limit is not None:
                 where_expr += ' limit %s '
@@ -212,9 +217,10 @@ class QuerySet():
                 where_expr += ' offset %s '
                 params.append(offset)
 
-        if count:
+        # 构建不同操作的sql语句
+        if method == 'count':
             sql = 'select count(*) from %s %s;' % (self.model.db_table, where_expr)
-        elif update_dict:
+        elif method == 'update' and update_dict:
             _keys = []
             _params = []
             for key, val in update_dict.items():
@@ -225,6 +231,8 @@ class QuerySet():
             params = _params + params
             sql = 'update %s set %s %s;' % (
                 self.model.db_table, ', '.join([key + ' = %s' for key in _keys]), where_expr)
+        elif method == 'delete':
+            sql = 'delete from %s %s;' % (self.model.db_table, where_expr)
         else:
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
         return sql, params
