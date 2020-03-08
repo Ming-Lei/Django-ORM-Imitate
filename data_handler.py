@@ -47,6 +47,10 @@ def execute_raw_sql(db_label, sql, params=None):
     return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
 
 
+class Error(Exception):
+    pass
+
+
 class QuerySet():
     def __init__(self, model):
         self.model = model
@@ -113,6 +117,50 @@ class QuerySet():
     # exists
     def exists(self):
         return bool(self.count())
+    
+    # todo
+    def delete(self):
+        pass
+    
+    # values
+    def values(self, *args):
+        # 字段检查
+        err_fields = set(args) - set(self.fields_list)
+        if err_fields:
+            raise Error('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+        
+        if not args:
+            args = self.fields_list
+        self.select()
+        return ({y: getattr(x, y) for y in args} for x in self)
+
+    # values_list
+    def values_list(self, *args, **kwargs):
+        # 字段检查
+        err_fields = set(args) - set(self.fields_list)
+        if err_fields:
+            raise Error('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+
+        flat = kwargs.pop('flat', False)
+        # flat 只能返回一个字段列表
+        if flat and len(args) > 1:
+            raise Error('flat is not valid when values_list is called with more than one field.')
+        
+        self.select()
+        # 返回指定一个字段对应的迭代器
+        if flat and len(args) == 1:
+            values_field = args[0]
+            return (getattr(x, values_field) for x in self)
+        # 没有传入指定字段，返回全部
+        if not args:
+            args = self.fields_list
+        return ([getattr(x, y) for y in args] for x in self)
+
+    # query 查询语句
+    @property
+    def query(self):
+        sql, params = self.sql_expr()
+        return sql % tuple(params)
 
     # sql查询基础函数
     def select(self):
@@ -150,8 +198,8 @@ class QuerySet():
             where_expr += ' , '.join(order_list)
 
         if update_dict and self.limit_dict:
-            # todo 报错 无法更新
-            pass
+            # 不支持切片更新
+            raise Error('Cannot update a query once a slice has been taken.')        
 
         # limit加count不生效
         if not count:
