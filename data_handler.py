@@ -66,7 +66,6 @@ class QuerySet():
         self.limit_dict = {}
 
         self.select_result = None
-        self.select_count = None
     
     # all函数，返回一个新的QuerySet对象（无筛选条件）
     def all(self):
@@ -82,31 +81,32 @@ class QuerySet():
     
     # first
     def first(self):
-        if self.select_result is None:
-            # 没有查询结果 使用fetchone获取第一个
-            sql, params = self.sql_expr()
-            value = Database.execute(self.model.db_label, sql, params).fetchone()
-        else:
-            # 有查询结果 直接返回第一个
-            value = self.select_result[0] if self.select_result else None
-        if value:
-            # 返回实例化的model对象
-            inst = self.model(**dict(zip(self.fields_list, value)))
-            return inst
-        return None
+        return self.get_index(0)
 
     # count
     def count(self):
-        if self.select_count is None:
-            if self.limit_dict:
-                # 有数量限制，取得查询结果的长度
-                self.select()
-                self.select_count = len(self.select_result)
+        if self.select_result is not None:
+            return len(self.select_result)
+
+        # limit查询特殊处理
+        limit = self.limit_dict.get('limit', 0)
+        offset = self.limit_dict.get('offset', 0)
+        if limit and offset:
+            # 构建无limit_dict的query
+            count_query = self.new(limit_dict={'limit': None, 'offset': None})
+            all_count = count_query.count()
+            # 根据实际数量及偏移量计算count
+            if offset > all_count:
+                select_count = 0
+            elif offset + limit > all_count:
+                select_count = all_count - offset
             else:
-                # 无数量限制，使用count查询
-                sql, params = self.sql_expr(method='count')
-                (self.select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
-        return self.select_count
+                select_count = limit
+        else:
+            # 无数量限制，使用count查询
+            sql, params = self.sql_expr(method='count')
+            (select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
+        return select_count
     
     # update
     def update(self, **kwargs):
@@ -182,6 +182,7 @@ class QuerySet():
             where_expr += ' where '
 
         if self.filter_dict:
+            # todo 处理双下划线
             params.extend(self.filter_dict.values())
             equations = [key + ' = %s' for key in self.filter_dict.keys()]
             where_expr += '(' + ' and '.join(equations) + ')'
@@ -206,16 +207,15 @@ class QuerySet():
             # 不支持切片更新
             raise Error('Cannot update a query once a slice has been taken.')        
 
-        # limit加count不生效
-        if method != 'count':
-            limit = self.limit_dict.get('limit')
-            if limit is not None:
-                where_expr += ' limit %s '
-                params.append(limit)
-            offset = self.limit_dict.get('offset')
-            if offset is not None:
-                where_expr += ' offset %s '
-                params.append(offset)
+        # limit
+        limit = self.limit_dict.get('limit')
+        if limit is not None:
+            where_expr += ' limit %s '
+            params.append(limit)
+        offset = self.limit_dict.get('offset')
+        if offset is not None:
+            where_expr += ' offset %s '
+            params.append(offset)
 
         # 构建不同操作的sql语句
         if method == 'count':
@@ -237,8 +237,18 @@ class QuerySet():
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
         return sql, params
 
+    # 索引值查询
+    def get_index(self, index):
+        if self.select_result is None:
+            index_query = self[index:index+1]
+            index_query.select()
+            index_value = index_query.select_result[0]
+        else:
+            index_value = self.select_result[index]
+        return self.model(**dict(zip(self.fields_list, index_value)))
+
     # 根据传入的筛选条件，返回新的QuerySet对象
-    def new(self, filter_dict={}, exclude_dict={}, limit_dict={}, order_fields=None):
+    def new(self, filter_dict=None, exclude_dict=None, limit_dict=None, order_fields=None):
         new_query = QuerySet(self.model)
 
         new_query.filter_dict.update(self.filter_dict)
@@ -286,12 +296,10 @@ class QuerySet():
             # 返回新的QuerySet对象
             return self.new(limit_dict=limit_dict)
         elif isinstance(index, int):
+            if index < 0:
+                raise Error('Negative indexing is not supported.')
             # 取得对应索引值
-            self.select()
-            value = self.select_result[index]
-            # 返回实例化的model对象
-            inst = self.model(**dict(zip(self.fields_list, value)))
-            return inst
+            return self.get_index(index)
         else:
             return None
 
