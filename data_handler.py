@@ -91,7 +91,7 @@ class QuerySet():
         # limit查询特殊处理
         limit = self.limit_dict.get('limit', 0)
         offset = self.limit_dict.get('offset', 0)
-        if limit and offset:
+        if limit or offset:
             # 构建无limit_dict的query
             count_query = self.new(limit_dict={'limit': None, 'offset': None})
             all_count = count_query.count()
