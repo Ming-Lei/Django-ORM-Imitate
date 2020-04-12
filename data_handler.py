@@ -164,8 +164,7 @@ class QuerySet():
     # query 查询语句
     @property
     def query(self):
-        sql, params = self.sql_expr()
-        return sql % tuple(params)
+        return self.sql_expr()
 
     # sql查询基础函数
     def select(self):
@@ -182,15 +181,14 @@ class QuerySet():
             where_expr += ' where '
 
         if self.filter_dict:
-            # todo 处理双下划线
-            params.extend(self.filter_dict.values())
-            equations = [key + ' = %s' for key in self.filter_dict.keys()]
-            where_expr += '(' + ' and '.join(equations) + ')'
+            temp_sql, temp_params = self.magic_query(self.filter_dict)
+            where_expr += '(' + ' and '.join(temp_sql) + ')'
+            params.extend(temp_params)
 
         if self.exclude_dict:
-            params.extend(self.exclude_dict.values())
-            equations = [key + ' = %s' for key in self.exclude_dict.keys()]
-            where_expr += ' and not (' + ' and '.join(equations) + ')'
+            temp_sql, temp_params = self.magic_query(self.exclude_dict)
+            where_expr += ' and not (' + ' and '.join(temp_sql) + ')'
+            params.extend(temp_params)
         
         if self.order_fields:
             where_expr += ' order by '
@@ -236,6 +234,41 @@ class QuerySet():
         else:
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
         return sql, params
+
+    # 处理双下划线特殊查询
+    def magic_query(self, query_dict):
+        correspond_dict = {
+            '': ' = %s',
+            'gt': ' > %s',
+            'gte': ' >= %s',
+            'lt': ' < %s',
+            'lte': ' <= %s',
+            'in': ' in %s',
+            'contains': ' like %%%s%%',
+            'startswith': ' like %s%% ',
+            'endswith': ' like %%%s ',
+            'range': ' between %s and %s '
+        }
+
+        sql_list = []
+        params = []
+        for query_str, value in query_dict.items():
+            if '__' in query_str:
+                field, magic = query_str.split('__')
+            else:
+                field = query_str
+                magic = ''
+            temp_sql = correspond_dict.get(magic)
+            if temp_sql:
+                sql_list.append(field + temp_sql)
+                params.append(value)
+            elif magic == 'isnull':
+                if value:
+                    sql_list.append(field + ' is null ')
+                else:
+                    sql_list.append(field + ' is not null ')
+        return sql_list, params
+
 
     # 索引值查询
     def get_index(self, index):
@@ -362,6 +395,9 @@ class Model(with_metaclass(MetaModel, dict)):
     def __init__(self, **kw):
         for k, v in kw.items():
             setattr(self, k, v)
+
+    def __repr__(self):
+        return '<%s obj>' % self.__class__.__name__
 
     def __nonzero__(self):
         return bool(self.__dict__)

@@ -23,12 +23,12 @@ class TestModel(Model):
 # create instance
 test = TestModel()
 test.a = 'john'
-test.b = 3
+test.b = 1
 test.save()
 
 test = TestModel()
 test.a = 'marry'
-test.b = 3
+test.b = 2
 test.save()
 
 test = TestModel()
@@ -36,11 +36,12 @@ test.a = 'john'
 test.b = 3
 test.save()
 
-filter_result = TestModel.objects.filter(a='john', b=3)
+filter_result = TestModel.objects.filter(a='john', b__gte=1).exclude(b__in=[3, 4])
+print(filter_result.query)
 print(filter_result.count())
 
 # select
-for r in filter_result[1:5]:
+for r in filter_result[:5]:
     print(type(r))
     print(r.a)
     print(r.b)
