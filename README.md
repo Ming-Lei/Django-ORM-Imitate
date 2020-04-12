@@ -38,13 +38,13 @@ Insert
 
 ```python
 test = TestModel()
-test.a = 5
+test.a = 1
 test.b = 'john'
 test.save()
 
 test = TestModel()
 test.a = 'marry'
-test.b = 3
+test.b = 2
 test.save()
 
 test = TestModel()
@@ -57,9 +57,11 @@ Query
 -----
 
 ```python
-filter_result = TestModel.objects.filter(a='john', b=3)
+filter_result = TestModel.objects.filter(a='john', b__gte=1).exclude(b__in=[3, 4])
+print(filter_result.query)
+
 # select
-for r in filter_result[1:5]:
+for r in filter_result[:5]:
     print(type(r))
     print(r.a)
     print(r.b)
