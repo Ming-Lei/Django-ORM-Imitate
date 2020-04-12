@@ -247,7 +247,6 @@ class QuerySet():
             'contains': ' like %%%s%%',
             'startswith': ' like %s%% ',
             'endswith': ' like %%%s ',
-            'range': ' between %s and %s '
         }
 
         sql_list = []
@@ -267,6 +266,9 @@ class QuerySet():
                     sql_list.append(field + ' is null ')
                 else:
                     sql_list.append(field + ' is not null ')
+            elif magic == 'range':
+                sql_list.append(' between %s and %s ')
+                params.extend(value)
         return sql_list, params
 
 
