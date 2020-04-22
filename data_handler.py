@@ -61,7 +61,9 @@ class QuerySet():
         self.fields_list = list(self.model.fields.keys())
 
         self.filter_dict = {}
+        self.filter_args = []
         self.exclude_dict = {}
+        self.exclude_args = []
         self.order_fields = []
         self.limit_dict = {}
 
@@ -72,12 +74,12 @@ class QuerySet():
         return QuerySet(self.model)
 
     # filter函数，返回一个新的QuerySet对象
-    def filter(self, **kwargs):
-        return self.new(filter_dict=kwargs)
+    def filter(self, *args, **kwargs):
+        return self.new(filter_args=args, filter_dict=kwargs)
 
     # exclude函数，返回一个新的QuerySet对象
-    def exclude(self, **kwargs):
-        return self.new(exclude_dict=kwargs)
+    def exclude(self, *args, **kwargs):
+        return self.new(exclude_args=args, exclude_dict=kwargs)
     
     # first
     def first(self):
@@ -283,24 +285,21 @@ class QuerySet():
         return self.model(**dict(zip(self.fields_list, index_value)))
 
     # 根据传入的筛选条件，返回新的QuerySet对象
-    def new(self, filter_dict=None, exclude_dict=None, limit_dict=None, order_fields=None):
+    def new(self, **kwargs):
         new_query = QuerySet(self.model)
 
-        new_query.filter_dict.update(self.filter_dict)
-        if filter_dict:
-            new_query.filter_dict.update(filter_dict)
+        args_dicts = ['filter_dict', 'exclude_dict', 'limit_dict']
+        for arg_key in args_dicts:
+            new_query.filter_dict.update(getattr(self, arg_key, {}))
+            arg_value = kwargs.get(arg_key, {})
+            if arg_value:
+                new_query.filter_dict.update(arg_value)
 
-        new_query.exclude_dict.update(self.exclude_dict)
-        if exclude_dict:
-            new_query.exclude_dict.update(exclude_dict)
-
-        new_query.limit_dict.update(self.limit_dict)
-        if limit_dict:
-            new_query.limit_dict.update(limit_dict)
-        
         new_query.order_fields = self.order_fields[:]
-        if order_fields:
-            new_query.order_fields = order_fields
+        if 'order_fields' in kwargs and kwargs['order_fields']:
+            new_query.order_fields = kwargs['order_fields']
+
+        # todo filter_args exclude_args
 
         return new_query
 
@@ -353,6 +352,11 @@ class QuerySet():
 
     def __repr__(self):
         return '<QuerySet Obj>'
+
+
+class Q():
+    # todo Q查询
+    pass
 
 
 class Field():
