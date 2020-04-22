@@ -290,9 +290,9 @@ class QuerySet():
 
         args_dicts = ['filter_dict', 'exclude_dict', 'limit_dict']
         for arg_key in args_dicts:
-            self_value = getattr(self, arg_key, {})
+            temp_value = getattr(self, arg_key, {})
             arg_value = kwargs.get(arg_key, {})
-            temp_value = self_value.update(arg_value)
+            temp_value.update(arg_value)
             if temp_value:
                 setattr(new_query, arg_key, temp_value)
 
