@@ -73,11 +73,11 @@ class QuerySet():
 
     # filter函数，返回一个新的QuerySet对象
     def filter(self, *args, **kwargs):
-        return self.new(filter_args=args, filter_dict=kwargs)
+        return self.new(False, *args, **kwargs)
 
     # exclude函数，返回一个新的QuerySet对象
     def exclude(self, *args, **kwargs):
-        return self.new(exclude_args=args, exclude_dict=kwargs)
+        return self.new(True, *args, **kwargs)
 
     # first
     def first(self):
@@ -116,7 +116,7 @@ class QuerySet():
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
-        return self.new(order_fields=args)
+        return self.new(False, order_fields=args)
 
     # exists
     def exists(self):
@@ -248,34 +248,30 @@ class QuerySet():
         return self.model(**dict(zip(self.fields_list, index_value)))
 
     # 根据传入的筛选条件，返回新的QuerySet对象
-    def new(self, **kwargs):
+    def new(self, negate, *args, **kwargs):
         new_query = QuerySet(self.model)
 
-        new_query.filter_Q = self.filter_Q
-        if 'filter_args' in kwargs:
-            for args in kwargs['filter_args']:
-                new_query.filter_Q.add(args, 'AND')
-
-        if 'filter_dict' in kwargs and kwargs['filter_dict']:
-            for k, v in kwargs['filter_dict'].items():
-                new_query.filter_Q.children.append((k, v))
-
-        new_query.exclude_Q = self.exclude_Q
-        if 'exclude_args' in kwargs:
-            for args in kwargs['exclude_args']:
-                new_query.exclude_Q.add(args, 'AND')
-
-        if 'exclude_dict' in kwargs and kwargs['exclude_dict']:
-            for k, v in kwargs['exclude_dict'].items():
-                new_query.exclude_Q.children.append((k, v))
-
-        new_query.limit_dict = self.limit_dict
-        if 'limit_dict' in kwargs and kwargs['limit_dict']:
-            new_query.limit_dict.update(kwargs['limit_dict'])
+        new_query.limit_dict.update(self.limit_dict)
+        limit_dict = kwargs.pop('limit_dict', {})
+        new_query.limit_dict.update(limit_dict)
 
         new_query.order_fields = self.order_fields[:]
-        if 'order_fields' in kwargs and kwargs['order_fields']:
-            new_query.order_fields = kwargs['order_fields']
+        order_fields = kwargs.pop('order_fields', [])
+        if order_fields:
+            new_query.order_fields = order_fields
+
+        new_query.filter_Q = self.filter_Q
+        new_query.exclude_Q = self.exclude_Q
+        temp_Q = Q()
+        for arg in args:
+            temp_Q.add(arg, 'AND')
+        for k, v in kwargs.items():
+            temp_Q.children.append((k, v))
+        if temp_Q:
+            if negate:
+                self.exclude_Q.add(temp_Q, 'AND')
+            else:
+                self.filter_Q.add(temp_Q, 'AND')
 
         return new_query
 
@@ -304,7 +300,7 @@ class QuerySet():
             if limit:
                 limit_dict['limit'] = limit
             # 返回新的QuerySet对象
-            return self.new(limit_dict=limit_dict)
+            return self.new(False, limit_dict=limit_dict)
         elif isinstance(index, int):
             if index < 0:
                 raise Error('Negative indexing is not supported.')
@@ -354,9 +350,7 @@ class Q():
                 temp_sql, temp_params = child._sql_expr()
                 if temp_sql and temp_params:
                     raw_sql = child.connector.join(temp_sql)
-                    if child.negated and child.connector != self.connector:
-                        raw_sql = ' not ( ' + raw_sql + ' ) '
-                    elif child.negated:
+                    if child.negated:
                         raw_sql = ' not ( ' + raw_sql + ' ) '
                     elif child.connector != self.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
