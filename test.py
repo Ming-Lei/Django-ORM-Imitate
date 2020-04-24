@@ -1,4 +1,4 @@
-from data_handler import Database, Model, Field, execute_raw_sql
+from data_handler import Database, Model, Field, execute_raw_sql, Q
 
 # connect database
 db_config = {
@@ -36,7 +36,7 @@ test.a = 'john'
 test.b = 3
 test.save()
 
-filter_result = TestModel.objects.filter(a='john', b__gte=1).exclude(b__in=[3, 4])
+filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), b__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 print(filter_result.count())
 

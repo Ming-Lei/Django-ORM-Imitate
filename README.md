@@ -57,7 +57,8 @@ Query
 -----
 
 ```python
-filter_result = TestModel.objects.filter(a='john', b__gte=1).exclude(b__in=[3, 4])
+from data_handler import Q
+filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), b__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 
 # select

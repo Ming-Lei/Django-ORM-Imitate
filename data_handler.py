@@ -60,15 +60,13 @@ class QuerySet():
         self.model = model
         self.fields_list = list(self.model.fields.keys())
 
-        self.filter_dict = {}
-        self.filter_args = []
-        self.exclude_dict = {}
-        self.exclude_args = []
+        self.filter_Q = Q()
+        self.exclude_Q = Q()
         self.order_fields = []
         self.limit_dict = {}
 
         self.select_result = None
-    
+
     # all函数，返回一个新的QuerySet对象（无筛选条件）
     def all(self):
         return QuerySet(self.model)
@@ -80,7 +78,7 @@ class QuerySet():
     # exclude函数，返回一个新的QuerySet对象
     def exclude(self, *args, **kwargs):
         return self.new(exclude_args=args, exclude_dict=kwargs)
-    
+
     # first
     def first(self):
         return self.get_index(0)
@@ -109,7 +107,7 @@ class QuerySet():
             sql, params = self.sql_expr(method='count')
             (select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
         return select_count
-    
+
     # update
     def update(self, **kwargs):
         if kwargs:
@@ -119,23 +117,23 @@ class QuerySet():
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         return self.new(order_fields=args)
-    
+
     # exists
     def exists(self):
         return bool(self.count())
-    
+
     # delete
     def delete(self):
         sql, params = self.sql_expr(method='delete')
         Database.execute(self.model.db_label, sql, params, delete=True)
-    
+
     # values
     def values(self, *args):
         # 字段检查
         err_fields = set(args) - set(self.fields_list)
         if err_fields:
             raise Error('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-        
+
         if not args:
             args = self.fields_list
         self.select()
@@ -152,7 +150,7 @@ class QuerySet():
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
             raise Error('flat is not valid when values_list is called with more than one field.')
-        
+
         self.select()
         # 返回指定一个字段对应的迭代器
         if flat and len(args) == 1:
@@ -179,19 +177,21 @@ class QuerySet():
         params = []
         where_expr = ''
 
-        if self.filter_dict or self.exclude_dict:
+        if self.filter_Q or self.exclude_Q:
             where_expr += ' where '
 
-        if self.filter_dict:
-            temp_sql, temp_params = self.magic_query(self.filter_dict)
-            where_expr += '(' + ' and '.join(temp_sql) + ')'
+        if self.filter_Q:
+            temp_sql, temp_params = self.filter_Q.sql_expr()
+            where_expr += '(' + temp_sql + ')'
             params.extend(temp_params)
 
-        if self.exclude_dict:
-            temp_sql, temp_params = self.magic_query(self.exclude_dict)
-            where_expr += ' and not (' + ' and '.join(temp_sql) + ')'
+        if self.exclude_Q:
+            temp_sql, temp_params = self.exclude_Q.sql_expr()
+            if params:
+                where_expr += ' and '
+            where_expr += ' not (' + temp_sql + ')'
             params.extend(temp_params)
-        
+
         if self.order_fields:
             where_expr += ' order by '
             order_list = []
@@ -205,7 +205,7 @@ class QuerySet():
 
         if update_dict and self.limit_dict:
             # 不支持切片更新
-            raise Error('Cannot update a query once a slice has been taken.')        
+            raise Error('Cannot update a query once a slice has been taken.')
 
         # limit
         limit = self.limit_dict.get('limit')
@@ -237,47 +237,10 @@ class QuerySet():
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
         return sql, params
 
-    # 处理双下划线特殊查询
-    def magic_query(self, query_dict):
-        correspond_dict = {
-            '': ' = %s',
-            'gt': ' > %s',
-            'gte': ' >= %s',
-            'lt': ' < %s',
-            'lte': ' <= %s',
-            'in': ' in %s',
-            'contains': ' like %%%s%%',
-            'startswith': ' like %s%% ',
-            'endswith': ' like %%%s ',
-        }
-
-        sql_list = []
-        params = []
-        for query_str, value in query_dict.items():
-            if '__' in query_str:
-                field, magic = query_str.split('__')
-            else:
-                field = query_str
-                magic = ''
-            temp_sql = correspond_dict.get(magic)
-            if temp_sql:
-                sql_list.append(field + temp_sql)
-                params.append(value)
-            elif magic == 'isnull':
-                if value:
-                    sql_list.append(field + ' is null ')
-                else:
-                    sql_list.append(field + ' is not null ')
-            elif magic == 'range':
-                sql_list.append(' between %s and %s ')
-                params.extend(value)
-        return sql_list, params
-
-
     # 索引值查询
     def get_index(self, index):
         if self.select_result is None:
-            index_query = self[index:index+1]
+            index_query = self[index:index + 1]
             index_query.select()
             index_value = index_query.select_result[0]
         else:
@@ -288,19 +251,31 @@ class QuerySet():
     def new(self, **kwargs):
         new_query = QuerySet(self.model)
 
-        args_dicts = ['filter_dict', 'exclude_dict', 'limit_dict']
-        for arg_key in args_dicts:
-            temp_value = getattr(self, arg_key, {})
-            arg_value = kwargs.get(arg_key, {})
-            temp_value.update(arg_value)
-            if temp_value:
-                setattr(new_query, arg_key, temp_value)
+        new_query.filter_Q = self.filter_Q
+        if 'filter_args' in kwargs:
+            for args in kwargs['filter_args']:
+                new_query.filter_Q.add(args, 'AND')
+
+        if 'filter_dict' in kwargs and kwargs['filter_dict']:
+            for k, v in kwargs['filter_dict'].items():
+                new_query.filter_Q.children.append((k, v))
+
+        new_query.exclude_Q = self.exclude_Q
+        if 'exclude_args' in kwargs:
+            for args in kwargs['exclude_args']:
+                new_query.exclude_Q.add(args, 'AND')
+
+        if 'exclude_dict' in kwargs and kwargs['exclude_dict']:
+            for k, v in kwargs['exclude_dict'].items():
+                new_query.exclude_Q.children.append((k, v))
+
+        new_query.limit_dict = self.limit_dict
+        if 'limit_dict' in kwargs and kwargs['limit_dict']:
+            new_query.limit_dict.update(kwargs['limit_dict'])
 
         new_query.order_fields = self.order_fields[:]
         if 'order_fields' in kwargs and kwargs['order_fields']:
             new_query.order_fields = kwargs['order_fields']
-
-        # todo filter_args exclude_args
 
         return new_query
 
@@ -344,7 +319,7 @@ class QuerySet():
         for value in self.select_result:
             inst = self.model(**dict(zip(self.fields_list, value)))
             yield inst
-    
+
     def __nonzero__(self):
         return bool(self.count())
 
@@ -356,8 +331,129 @@ class QuerySet():
 
 
 class Q():
-    # todo Q查询
-    pass
+    def __init__(self, *args, **kwargs):
+        self.children = list(args) + list(kwargs.items())
+        self.connector = 'AND'
+        self.negated = False
+
+    # 取得对应sql及参数
+    def sql_expr(self):
+        sql_list, params = self._sql_expr()
+        return self.connector.join(sql_list), params
+
+    # 构建sql查询语句
+    def _sql_expr(self):
+        sql_list = []
+        params = []
+        for child in self.children:
+            if not isinstance(child, Q):
+                temp_sql, temp_params = self.magic_query(child)
+                sql_list.append(temp_sql)
+                params.append(temp_params)
+            else:
+                temp_sql, temp_params = child._sql_expr()
+                if temp_sql and temp_params:
+                    raw_sql = child.connector.join(temp_sql)
+                    if child.negated and child.connector != self.connector:
+                        raw_sql = ' not ( ' + raw_sql + ' ) '
+                    elif child.negated:
+                        raw_sql = ' not ( ' + raw_sql + ' ) '
+                    elif child.connector != self.connector:
+                        raw_sql = ' ( ' + raw_sql + ' ) '
+                    sql_list.append(raw_sql)
+                    params.extend(temp_params)
+        return sql_list, params
+
+    # 处理双下划线特殊查询
+    def magic_query(self, child_query):
+        correspond_dict = {
+            '': ' = %s ',
+            'gt': ' > %s ',
+            'gte': ' >= %s ',
+            'lt': ' < %s ',
+            'lte': ' <= %s ',
+            'in': ' in %s ',
+            'contains': ' like %%%s%% ',
+            'startswith': ' like %s%% ',
+            'endswith': ' like %%%s ',
+        }
+
+        raw_sql = ''
+        params = ''
+        query_str, value = child_query
+        if '__' in query_str:
+            field, magic = query_str.split('__')
+        else:
+            field = query_str
+            magic = ''
+        temp_sql = correspond_dict.get(magic)
+        if temp_sql:
+            raw_sql = ' ' + field + temp_sql
+            params = value
+        elif magic == 'isnull':
+            if value:
+                raw_sql = ' ' + field + ' is null '
+            else:
+                raw_sql = ' ' + field + ' is not null '
+        elif magic == 'range':
+            raw_sql = ' between %s and %s '
+            params = value
+        return raw_sql, params
+
+    # 添加Q对象
+    def add(self, data, conn):
+        if not isinstance(data, Q):
+            raise TypeError(data)
+        if self.connector == conn:
+            if not data.negated and (data.connector == conn or len(data) == 1):
+                self.children.extend(data.children)
+            else:
+                self.children.append(data)
+        else:
+            obj = Q()
+            obj.connector = conn
+            obj.children = self.children[:]
+            self.children = [obj, data]
+
+    def _combine(self, other, conn):
+        if not isinstance(other, Q):
+            raise TypeError(other)
+        obj = Q()
+        obj.connector = conn
+        obj.add(self, conn)
+        obj.add(other, conn)
+        return obj
+
+    # 重载 |
+    def __or__(self, other):
+        return self._combine(other, 'OR')
+
+    # 重载 &
+    def __and__(self, other):
+        return self._combine(other, 'AND')
+
+    # 重载 ~
+    def __invert__(self):
+        obj = Q()
+        obj.add(self, 'AND')
+        obj.negated = not self.negated
+        return obj
+
+    def __nonzero__(self):
+        return bool(self.children)
+
+    def __len__(self):
+        return len(self.children)
+
+    def __bool__(self):
+        return bool(self.children)
+
+    def __repr__(self):
+        if self.negated:
+            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
+                                                                  in self.children]))
+        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
+                                                        self.children]))
 
 
 class Field():
