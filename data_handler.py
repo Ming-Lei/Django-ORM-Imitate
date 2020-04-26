@@ -93,7 +93,7 @@ class QuerySet():
         offset = self.limit_dict.get('offset', 0)
         if limit or offset:
             # 构建无limit_dict的query
-            count_query = self.new(limit_dict={'limit': None, 'offset': None})
+            count_query = self._clone(limit_dict={'limit': None, 'offset': None})
             all_count = count_query.count()
             # 根据实际数量及偏移量计算count
             if offset > all_count:
@@ -116,7 +116,7 @@ class QuerySet():
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
-        return self.new(False, order_fields=args)
+        return self._clone(order_fields=args)
 
     # exists
     def exists(self):
@@ -247,21 +247,24 @@ class QuerySet():
             index_value = self.select_result[index]
         return self.model(**dict(zip(self.fields_list, index_value)))
 
-    # 根据传入的筛选条件，返回新的QuerySet对象
-    def new(self, negate, *args, **kwargs):
-        new_query = QuerySet(self.model)
+    # clone
+    def _clone(self, **kwargs):
+        obj = QuerySet(self.model)
+        obj.filter_Q = self.filter_Q
+        obj.exclude_Q = self.exclude_Q
+        obj.order_fields = self.order_fields[:]
+        obj.limit_dict.update(self.limit_dict)
 
-        new_query.limit_dict.update(self.limit_dict)
         limit_dict = kwargs.pop('limit_dict', {})
-        new_query.limit_dict.update(limit_dict)
-
-        new_query.order_fields = self.order_fields[:]
+        obj.limit_dict.update(limit_dict)
         order_fields = kwargs.pop('order_fields', [])
         if order_fields:
-            new_query.order_fields = order_fields
+            obj.order_fields = order_fields
+        return obj
 
-        new_query.filter_Q = self.filter_Q
-        new_query.exclude_Q = self.exclude_Q
+    # 根据传入的筛选条件，返回新的QuerySet对象
+    def new(self, negate, *args, **kwargs):
+        new_query = self._clone()
         temp_Q = Q()
         for arg in args:
             temp_Q.add(arg, 'AND')
@@ -269,10 +272,9 @@ class QuerySet():
             temp_Q.children.append((k, v))
         if temp_Q:
             if negate:
-                self.exclude_Q.add(temp_Q, 'AND')
+                new_query.exclude_Q.add(temp_Q, 'AND')
             else:
-                self.filter_Q.add(temp_Q, 'AND')
-
+                new_query.filter_Q.add(temp_Q, 'AND')
         return new_query
 
     # 自定义切片及索引取值
@@ -300,7 +302,7 @@ class QuerySet():
             if limit:
                 limit_dict['limit'] = limit
             # 返回新的QuerySet对象
-            return self.new(False, limit_dict=limit_dict)
+            return self._clone(limit_dict=limit_dict)
         elif isinstance(index, int):
             if index < 0:
                 raise Error('Negative indexing is not supported.')
