@@ -460,6 +460,23 @@ class Field():
         return False
 
 
+def func_bind(model, func_name):
+    # 使用装饰器确保调用QuerySet函数为新对象
+    def wrapper(*args, **kwargs):
+        queryset = QuerySet(model)
+        queryset_func = getattr(queryset, func_name)
+        return queryset_func(*args, **kwargs)
+    return wrapper
+
+
+class Manager():
+    def __init__(self, model):
+        # 绑定QuerySet查询函数至model
+        func_list = ['all', 'count', 'filter', 'exclude', 'first', 'exists', 'order_by', 'values', 'values_list']
+        for func_name in func_list:
+            setattr(self, func_name, func_bind(model, func_name))
+
+
 class MetaModel(type):
     db_table = None
     fields = {}
@@ -472,7 +489,7 @@ class MetaModel(type):
                 fields[key] = val
         cls.fields = fields
         cls.attrs = attrs
-        cls.objects = QuerySet(cls)
+        cls.objects = Manager(cls)
 
 
 def with_metaclass(meta, *bases):
