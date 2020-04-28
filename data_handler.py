@@ -3,56 +3,140 @@ import MySQLdb
 # py2 mysql-python  py3 mysqlclient
 
 
-# 数据库调用
-class Database():
-    autocommit = True
-    conn = {}
-    db_config = {}
-
-    @classmethod
-    def connect(cls, **databases):
-        for db_label, db_config in databases.items():
-            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'),
-                                                 port=int(db_config.get('port', 3306)),
-                                                 user=db_config.get('user', 'root'),
-                                                 passwd=db_config.get('password', ''),
-                                                 db=db_config.get('database', 'test'),
-                                                 charset=db_config.get('charset', 'utf8'))
-            cls.conn[db_label].autocommit(cls.autocommit)
-        cls.db_config.update(databases)
-
-    @classmethod
-    def get_conn(cls, db_label):
-        if not cls.conn[db_label] or not cls.conn[db_label].open:
-            cls.connect(**cls.db_config)
-        try:
-            cls.conn[db_label].ping()
-        except MySQLdb.OperationalError:
-            cls.connect(**cls.db_config)
-        return cls.conn[db_label]
-
-    @classmethod
-    def execute(cls, db_label, *args, **kwargs):
-        db_conn = cls.get_conn(db_label)
-        cursor = db_conn.cursor()
-        cursor.execute(*args)
-        delete = kwargs.pop('delete', False)
-        if delete:
-            db_conn.commit()
-        return cursor
-
-    def __del__(self):
-        for _, conn in self.conn:
-            if conn and conn.open:
-                conn.close()
-
-
-def execute_raw_sql(db_label, sql, params=None):
-    return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
-
-
 class Error(Exception):
     pass
+
+
+class Field():
+    def __nonzero__(self):
+        return False
+
+    def __bool__(self):
+        return False
+
+
+class Q():
+    def __init__(self, *args, **kwargs):
+        self.children = list(args) + list(kwargs.items())
+        self.connector = 'AND'
+        self.negated = False
+
+    # 添加Q对象
+    def add(self, data, conn):
+        if not isinstance(data, Q):
+            raise TypeError(data)
+        if self.connector == conn:
+            if not data.negated and (data.connector == conn or len(data) == 1):
+                self.children.extend(data.children)
+            else:
+                self.children.append(data)
+        else:
+            obj = Q()
+            obj.connector = conn
+            obj.children = self.children[:]
+            self.children = [obj, data]
+
+    def _combine(self, other, conn):
+        if not isinstance(other, Q):
+            raise TypeError(other)
+        obj = Q()
+        obj.connector = conn
+        obj.add(self, conn)
+        obj.add(other, conn)
+        return obj
+
+    # 重载 |
+    def __or__(self, other):
+        return self._combine(other, 'OR')
+
+    # 重载 &
+    def __and__(self, other):
+        return self._combine(other, 'AND')
+
+    # 重载 ~
+    def __invert__(self):
+        obj = Q()
+        obj.add(self, 'AND')
+        obj.negated = not self.negated
+        return obj
+
+    # 构建sql查询语句
+    def _sql_expr(self):
+        sql_list = []
+        params = []
+        for child in self.children:
+            if not isinstance(child, Q):
+                temp_sql, temp_params = self.magic_query(child)
+                sql_list.append(temp_sql)
+                params.append(temp_params)
+            else:
+                temp_sql, temp_params = child._sql_expr()
+                if temp_sql and temp_params:
+                    raw_sql = child.connector.join(temp_sql)
+                    if child.negated:
+                        raw_sql = ' not ( ' + raw_sql + ' ) '
+                    elif child.connector != self.connector:
+                        raw_sql = ' ( ' + raw_sql + ' ) '
+                    sql_list.append(raw_sql)
+                    params.extend(temp_params)
+        return sql_list, params
+
+    # 取得对应sql及参数
+    def sql_expr(self):
+        sql_list, params = self._sql_expr()
+        return self.connector.join(sql_list), params
+
+    # 处理双下划线特殊查询
+    def magic_query(self, child_query):
+        correspond_dict = {
+            '': ' = %s ',
+            'gt': ' > %s ',
+            'gte': ' >= %s ',
+            'lt': ' < %s ',
+            'lte': ' <= %s ',
+            'in': ' in %s ',
+            'contains': ' like %%%s%% ',
+            'startswith': ' like %s%% ',
+            'endswith': ' like %%%s ',
+        }
+
+        raw_sql = ''
+        params = ''
+        query_str, value = child_query
+        if '__' in query_str:
+            field, magic = query_str.split('__')
+        else:
+            field = query_str
+            magic = ''
+        temp_sql = correspond_dict.get(magic)
+        if temp_sql:
+            raw_sql = ' ' + field + temp_sql
+            params = value
+        elif magic == 'isnull':
+            if value:
+                raw_sql = ' ' + field + ' is null '
+            else:
+                raw_sql = ' ' + field + ' is not null '
+        elif magic == 'range':
+            raw_sql = ' between %s and %s '
+            params = value
+        return raw_sql, params
+
+    def __len__(self):
+        return len(self.children)
+
+    def __nonzero__(self):
+        return bool(self.children)
+
+    def __bool__(self):
+        return bool(self.children)
+
+    def __repr__(self):
+        if self.negated:
+            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
+                                                                  in self.children]))
+        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
+                                                        self.children]))
 
 
 class QuerySet():
@@ -328,153 +412,39 @@ class QuerySet():
         return '<QuerySet Obj>'
 
 
-class Q():
-    def __init__(self, *args, **kwargs):
-        self.children = list(args) + list(kwargs.items())
-        self.connector = 'AND'
-        self.negated = False
-
-    # 取得对应sql及参数
-    def sql_expr(self):
-        sql_list, params = self._sql_expr()
-        return self.connector.join(sql_list), params
-
-    # 构建sql查询语句
-    def _sql_expr(self):
-        sql_list = []
-        params = []
-        for child in self.children:
-            if not isinstance(child, Q):
-                temp_sql, temp_params = self.magic_query(child)
-                sql_list.append(temp_sql)
-                params.append(temp_params)
-            else:
-                temp_sql, temp_params = child._sql_expr()
-                if temp_sql and temp_params:
-                    raw_sql = child.connector.join(temp_sql)
-                    if child.negated:
-                        raw_sql = ' not ( ' + raw_sql + ' ) '
-                    elif child.connector != self.connector:
-                        raw_sql = ' ( ' + raw_sql + ' ) '
-                    sql_list.append(raw_sql)
-                    params.extend(temp_params)
-        return sql_list, params
-
-    # 处理双下划线特殊查询
-    def magic_query(self, child_query):
-        correspond_dict = {
-            '': ' = %s ',
-            'gt': ' > %s ',
-            'gte': ' >= %s ',
-            'lt': ' < %s ',
-            'lte': ' <= %s ',
-            'in': ' in %s ',
-            'contains': ' like %%%s%% ',
-            'startswith': ' like %s%% ',
-            'endswith': ' like %%%s ',
-        }
-
-        raw_sql = ''
-        params = ''
-        query_str, value = child_query
-        if '__' in query_str:
-            field, magic = query_str.split('__')
-        else:
-            field = query_str
-            magic = ''
-        temp_sql = correspond_dict.get(magic)
-        if temp_sql:
-            raw_sql = ' ' + field + temp_sql
-            params = value
-        elif magic == 'isnull':
-            if value:
-                raw_sql = ' ' + field + ' is null '
-            else:
-                raw_sql = ' ' + field + ' is not null '
-        elif magic == 'range':
-            raw_sql = ' between %s and %s '
-            params = value
-        return raw_sql, params
-
-    # 添加Q对象
-    def add(self, data, conn):
-        if not isinstance(data, Q):
-            raise TypeError(data)
-        if self.connector == conn:
-            if not data.negated and (data.connector == conn or len(data) == 1):
-                self.children.extend(data.children)
-            else:
-                self.children.append(data)
-        else:
-            obj = Q()
-            obj.connector = conn
-            obj.children = self.children[:]
-            self.children = [obj, data]
-
-    def _combine(self, other, conn):
-        if not isinstance(other, Q):
-            raise TypeError(other)
-        obj = Q()
-        obj.connector = conn
-        obj.add(self, conn)
-        obj.add(other, conn)
-        return obj
-
-    # 重载 |
-    def __or__(self, other):
-        return self._combine(other, 'OR')
-
-    # 重载 &
-    def __and__(self, other):
-        return self._combine(other, 'AND')
-
-    # 重载 ~
-    def __invert__(self):
-        obj = Q()
-        obj.add(self, 'AND')
-        obj.negated = not self.negated
-        return obj
-
-    def __nonzero__(self):
-        return bool(self.children)
-
-    def __len__(self):
-        return len(self.children)
-
-    def __bool__(self):
-        return bool(self.children)
-
-    def __repr__(self):
-        if self.negated:
-            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
-                                                                  in self.children]))
-        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
-                                                        self.children]))
-
-
-class Field():
-    def __nonzero__(self):
-        return False
-
-    def __bool__(self):
-        return False
-
-
-def func_bind(model, func_name):
-    # 使用装饰器确保调用QuerySet函数为新对象
-    def wrapper(*args, **kwargs):
-        queryset = QuerySet(model)
-        queryset_func = getattr(queryset, func_name)
-        return queryset_func(*args, **kwargs)
-    return wrapper
-
-
 class Manager():
     def __init__(self, model):
-        # 绑定QuerySet查询函数至model
-        func_list = ['all', 'count', 'filter', 'exclude', 'first', 'exists', 'order_by', 'values', 'values_list']
-        for func_name in func_list:
-            setattr(self, func_name, func_bind(model, func_name))
+        self.model = model
+
+    def get_queryset(self):
+        return QuerySet(self.model)
+
+    def all(self):
+        return self.get_queryset()
+
+    def count(self):
+        return self.get_queryset().count()
+
+    def filter(self, *args, **kwargs):
+        return self.get_queryset().filter(*args, **kwargs)
+
+    def exclude(self, *args, **kwargs):
+        return self.get_queryset().exclude(*args, **kwargs)
+
+    def first(self):
+        return self.get_queryset().first()
+
+    def exists(self):
+        return self.get_queryset().exists()
+
+    def order_by(self, *args):
+        return self.get_queryset().order_by(*args)
+
+    def values(self, *args):
+        return self.get_queryset().values(*args)
+
+    def values_list(self, *args):
+        return self.get_queryset().values_list(*args)
 
 
 class MetaModel(type):
@@ -532,3 +502,51 @@ class Model(with_metaclass(MetaModel, dict)):
         insert = 'insert ignore into %s(%s) values (%s);' % (
             self.db_table, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
         return Database.execute(self.db_label, insert, self.__dict__.values())
+
+
+# 数据库调用
+class Database():
+    autocommit = True
+    conn = {}
+    db_config = {}
+
+    @classmethod
+    def connect(cls, **databases):
+        for db_label, db_config in databases.items():
+            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'),
+                                                 port=int(db_config.get('port', 3306)),
+                                                 user=db_config.get('user', 'root'),
+                                                 passwd=db_config.get('password', ''),
+                                                 db=db_config.get('database', 'test'),
+                                                 charset=db_config.get('charset', 'utf8'))
+            cls.conn[db_label].autocommit(cls.autocommit)
+        cls.db_config.update(databases)
+
+    @classmethod
+    def get_conn(cls, db_label):
+        if not cls.conn[db_label] or not cls.conn[db_label].open:
+            cls.connect(**cls.db_config)
+        try:
+            cls.conn[db_label].ping()
+        except MySQLdb.OperationalError:
+            cls.connect(**cls.db_config)
+        return cls.conn[db_label]
+
+    @classmethod
+    def execute(cls, db_label, *args, **kwargs):
+        db_conn = cls.get_conn(db_label)
+        cursor = db_conn.cursor()
+        cursor.execute(*args)
+        delete = kwargs.pop('delete', False)
+        if delete:
+            db_conn.commit()
+        return cursor
+
+    def __del__(self):
+        for _, conn in self.conn:
+            if conn and conn.open:
+                conn.close()
+
+
+def execute_raw_sql(db_label, sql, params=None):
+    return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
