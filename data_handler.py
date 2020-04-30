@@ -68,7 +68,7 @@ class Q():
             if not isinstance(child, Q):
                 temp_sql, temp_params = self.magic_query(child)
                 sql_list.append(temp_sql)
-                params.append(temp_params)
+                params.extend(temp_params)
             else:
                 temp_sql, temp_params = child._sql_expr()
                 if temp_sql and temp_params:
@@ -101,7 +101,7 @@ class Q():
         }
 
         raw_sql = ''
-        params = ''
+        params = []
         query_str, value = child_query
         if '__' in query_str:
             field, magic = query_str.split('__')
@@ -111,14 +111,17 @@ class Q():
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
-            params = value
+            if type(value) == list:
+                params = [tuple(value)]
+            else:
+                params = [value]
         elif magic == 'isnull':
             if value:
                 raw_sql = ' ' + field + ' is null '
             else:
                 raw_sql = ' ' + field + ' is not null '
         elif magic == 'range':
-            raw_sql = ' between %s and %s '
+            raw_sql = ' ' + field + ' between %s and %s '
             params = value
         return raw_sql, params
 
@@ -202,6 +205,12 @@ class QuerySet():
     def order_by(self, *args):
         return self._clone(order_fields=args)
 
+    # create
+    def create(self, **kwargs):
+        obj = self.model(**kwargs)
+        obj.save()
+        return obj
+
     # exists
     def exists(self):
         return bool(self.count())
@@ -209,7 +218,7 @@ class QuerySet():
     # delete
     def delete(self):
         sql, params = self.sql_expr(method='delete')
-        Database.execute(self.model.db_label, sql, params, delete=True)
+        Database.execute(self.model.db_label, sql, params)
 
     # values
     def values(self, *args):
@@ -248,7 +257,8 @@ class QuerySet():
     # query 查询语句
     @property
     def query(self):
-        return self.sql_expr()
+        sql, params = self.sql_expr()
+        return sql % params
 
     # sql查询基础函数
     def select(self):
@@ -319,7 +329,7 @@ class QuerySet():
             sql = 'delete from %s %s;' % (self.model.db_table, where_expr)
         else:
             sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
-        return sql, params
+        return sql, tuple(params)
 
     # 索引值查询
     def get_index(self, index):
@@ -437,6 +447,9 @@ class Manager():
     def exists(self):
         return self.get_queryset().exists()
 
+    def create(self, **kwargs):
+        return self.get_queryset().create(**kwargs)
+
     def order_by(self, *args):
         return self.get_queryset().order_by(*args)
 
@@ -537,9 +550,6 @@ class Database():
         db_conn = cls.get_conn(db_label)
         cursor = db_conn.cursor()
         cursor.execute(*args)
-        delete = kwargs.pop('delete', False)
-        if delete:
-            db_conn.commit()
         return cursor
 
     def __del__(self):
