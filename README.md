@@ -27,10 +27,10 @@ Define a model
 from data_handler import Model, Field
 
 class TestModel(Model):
-  db_table = 'test'
-  db_label = 'default'
-  a = Field()
-  b = Field()
+    __db_table__ = 'test'
+    __db_label__ = 'default'
+    a = Field()
+    b = Field()
 ```
 
 Insert
@@ -38,19 +38,15 @@ Insert
 
 ```python
 test = TestModel()
-test.a = 1
-test.b = 'john'
-test.save()
-
-test = TestModel()
-test.a = 'marry'
-test.b = 2
-test.save()
-
-test = TestModel()
 test.a = 'john'
-test.b = 3
+test.b = 1
 test.save()
+
+test = TestModel(a='marry', b=2)
+test.save()
+
+test = TestModel.objects.create(a='marry', b=3)
+
 ```
 
 Query
@@ -58,6 +54,7 @@ Query
 
 ```python
 from data_handler import Q
+
 filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), b__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 

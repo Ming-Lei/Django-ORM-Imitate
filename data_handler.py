@@ -461,7 +461,8 @@ class Manager():
 
 
 class MetaModel(type):
-    db_table = None
+    __db_table__ = None
+    __db_label__ = None
     fields = {}
 
     def __init__(cls, name, bases, attrs):
@@ -513,8 +514,8 @@ class Model(with_metaclass(MetaModel, dict)):
 
     def save(self):
         insert = 'insert ignore into %s(%s) values (%s);' % (
-            self.db_table, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
-        return Database.execute(self.db_label, insert, self.__dict__.values())
+            self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
+        return Database.execute(self.__db_label__, insert, self.__dict__.values())
 
 
 # 数据库调用

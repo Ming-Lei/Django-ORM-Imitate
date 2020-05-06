@@ -15,8 +15,8 @@ Database.connect(**db_config)
 
 # define model
 class TestModel(Model):
-    db_table = 'test'  # point table name
-    db_label = 'default'
+    __db_table__ = 'test'
+    __db_label__ = 'default'
     a = Field()
     b = Field()
 
@@ -26,15 +26,10 @@ test.a = 'john'
 test.b = 1
 test.save()
 
-test = TestModel()
-test.a = 'marry'
-test.b = 2
+test = TestModel(a='marry', b=2)
 test.save()
 
-test = TestModel()
-test.a = 'john'
-test.b = 3
-test.save()
+test = TestModel.objects.create(a='marry', b=3)
 
 filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), b__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
