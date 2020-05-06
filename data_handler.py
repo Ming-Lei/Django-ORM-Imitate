@@ -192,14 +192,14 @@ class QuerySet():
         else:
             # 无数量限制，使用count查询
             sql, params = self.sql_expr(method='count')
-            (select_count,) = Database.execute(self.model.db_label, sql, params).fetchone()
+            (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
         return select_count
 
     # update
     def update(self, **kwargs):
         if kwargs:
             sql, params = self.sql_expr(method='update', update_dict=kwargs)
-            Database.execute(self.model.db_label, sql, params)
+            Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
@@ -218,7 +218,7 @@ class QuerySet():
     # delete
     def delete(self):
         sql, params = self.sql_expr(method='delete')
-        Database.execute(self.model.db_label, sql, params)
+        Database.execute(self.model.__db_label__, sql, params)
 
     # values
     def values(self, *args):
@@ -264,7 +264,7 @@ class QuerySet():
     def select(self):
         if self.select_result is None:
             sql, params = self.sql_expr()
-            self.select_result = Database.execute(self.model.db_label, sql, params).fetchall()
+            self.select_result = Database.execute(self.model.__db_label__, sql, params).fetchall()
 
     # 根据当前筛选条件构建sql、params
     def sql_expr(self, method='select', update_dict=None):
@@ -313,7 +313,7 @@ class QuerySet():
 
         # 构建不同操作的sql语句
         if method == 'count':
-            sql = 'select count(*) from %s %s;' % (self.model.db_table, where_expr)
+            sql = 'select count(*) from %s %s;' % (self.model.__db_table__, where_expr)
         elif method == 'update' and update_dict:
             _keys = []
             _params = []
@@ -324,11 +324,11 @@ class QuerySet():
                 _params.append(val)
             params = _params + params
             sql = 'update %s set %s %s;' % (
-                self.model.db_table, ', '.join([key + ' = %s' for key in _keys]), where_expr)
+                self.model.__db_table__, ', '.join([key + ' = %s' for key in _keys]), where_expr)
         elif method == 'delete':
-            sql = 'delete from %s %s;' % (self.model.db_table, where_expr)
+            sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.db_table, where_expr)
+            sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.__db_table__, where_expr)
         return sql, tuple(params)
 
     # 索引值查询
