@@ -168,7 +168,10 @@ class QuerySet():
 
     # first
     def first(self):
-        return self.get_index(0)
+        try:
+            return self.get_index(0)
+        except IndexError:
+            return None
 
     # count
     def count(self):
