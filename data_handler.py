@@ -497,7 +497,10 @@ class Model(with_metaclass(MetaModel, dict)):
 
     def __init__(self, **kw):
         for k, v in kw.items():
-            setattr(self, k, v)
+            if k in self.fields:
+                setattr(self, k, v)
+            else:
+                raise TypeError("'%s' is an invalid keyword argument for this function" % k)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
