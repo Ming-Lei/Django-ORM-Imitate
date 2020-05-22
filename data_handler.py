@@ -8,12 +8,7 @@ class Error(Exception):
 
 
 class Field():
-    def __nonzero__(self):
-        return False
-
-    def __bool__(self):
-        return False
-
+    pass
 
 class Q():
     def __init__(self, *args, **kwargs):
@@ -474,6 +469,7 @@ class MetaModel(type):
         for key, val in cls.__dict__.items():
             if isinstance(val, Field):
                 fields[key] = val
+                setattr(cls, key, None)
         cls.fields = fields
         cls.attrs = attrs
         cls.objects = Manager(cls)
@@ -553,7 +549,7 @@ class Database():
         return cls.conn[db_label]
 
     @classmethod
-    def execute(cls, db_label, *args, **kwargs):
+    def execute(cls, db_label, *args):
         db_conn = cls.get_conn(db_label)
         cursor = db_conn.cursor()
         cursor.execute(*args)
