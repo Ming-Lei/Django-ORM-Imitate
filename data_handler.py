@@ -3,12 +3,9 @@ import MySQLdb
 # py2 mysql-python  py3 mysqlclient
 
 
-class Error(Exception):
-    pass
-
-
 class Field():
     pass
+
 
 class Q():
     def __init__(self, *args, **kwargs):
@@ -89,7 +86,6 @@ class Q():
             'gte': ' >= %s ',
             'lt': ' < %s ',
             'lte': ' <= %s ',
-            'in': ' in %s ',
             'contains': ' like %%%s%% ',
             'startswith': ' like %s%% ',
             'endswith': ' like %%%s ',
@@ -106,10 +102,7 @@ class Q():
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
-            if type(value) == list:
-                params = [tuple(value)]
-            else:
-                params = [value]
+            params = [value]
         elif magic == 'isnull':
             if value:
                 raw_sql = ' ' + field + ' is null '
@@ -118,6 +111,20 @@ class Q():
         elif magic == 'range':
             raw_sql = ' ' + field + ' between %s and %s '
             params = value
+        elif magic == 'in':
+            if isinstance(value, (QuerySet, ValuesQuerySet)):
+                subquery = value.query.clone()
+                # todo QuerySet id
+                if len(subquery.select) != 1:
+                    raise TypeError('Cannot use a multi-field %s as a filter value.'
+                                    % value.__class__.__name__)
+                sub_sql, sub_params = subquery.sql_expr()
+                raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
+                params = sub_params
+            else:
+                raw_sql = ' ' + field + ' in %s '
+                params = [tuple(value)]
+
         return raw_sql, params
 
     def __len__(self):
@@ -137,132 +144,21 @@ class Q():
                                                         self.children]))
 
 
-class QuerySet():
+class Query():
     def __init__(self, model):
         self.model = model
         self.fields_list = list(self.model.fields.keys())
 
+        self.flat = False
         self.filter_Q = Q()
         self.exclude_Q = Q()
-        self.order_fields = []
         self.limit_dict = {}
+        self.order_fields = []
+        self.select = list(self.model.fields.keys())
 
-        self.select_result = None
-
-    # all函数，返回一个新的QuerySet对象（无筛选条件）
-    def all(self):
-        return QuerySet(self.model)
-
-    # filter函数，返回一个新的QuerySet对象
-    def filter(self, *args, **kwargs):
-        return self.new(False, *args, **kwargs)
-
-    # exclude函数，返回一个新的QuerySet对象
-    def exclude(self, *args, **kwargs):
-        return self.new(True, *args, **kwargs)
-
-    # first
-    def first(self):
-        try:
-            return self.get_index(0)
-        except IndexError:
-            return None
-
-    # count
-    def count(self):
-        if self.select_result is not None:
-            return len(self.select_result)
-
-        # limit查询特殊处理
-        limit = self.limit_dict.get('limit', 0)
-        offset = self.limit_dict.get('offset', 0)
-        if limit or offset:
-            # 构建无limit_dict的query
-            count_query = self._clone(limit_dict={'limit': None, 'offset': None})
-            all_count = count_query.count()
-            # 根据实际数量及偏移量计算count
-            if offset > all_count:
-                select_count = 0
-            elif offset + limit > all_count:
-                select_count = all_count - offset
-            else:
-                select_count = limit
-        else:
-            # 无数量限制，使用count查询
-            sql, params = self.sql_expr(method='count')
-            (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
-        return select_count
-
-    # update
-    def update(self, **kwargs):
-        if kwargs:
-            sql, params = self.sql_expr(method='update', update_dict=kwargs)
-            Database.execute(self.model.__db_label__, sql, params)
-
-    # order_by函数，返回一个新的QuerySet对象
-    def order_by(self, *args):
-        return self._clone(order_fields=args)
-
-    # create
-    def create(self, **kwargs):
-        obj = self.model(**kwargs)
-        obj.save()
-        return obj
-
-    # exists
-    def exists(self):
-        return bool(self.count())
-
-    # delete
-    def delete(self):
-        sql, params = self.sql_expr(method='delete')
-        Database.execute(self.model.__db_label__, sql, params)
-
-    # values
-    def values(self, *args):
-        # 字段检查
-        err_fields = set(args) - set(self.fields_list)
-        if err_fields:
-            raise Error('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-
-        if not args:
-            args = self.fields_list
-        self.select()
-        return ({y: getattr(x, y) for y in args} for x in self)
-
-    # values_list
-    def values_list(self, *args, **kwargs):
-        # 字段检查
-        err_fields = set(args) - set(self.fields_list)
-        if err_fields:
-            raise Error('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-
-        flat = kwargs.pop('flat', False)
-        # flat 只能返回一个字段列表
-        if flat and len(args) > 1:
-            raise Error('flat is not valid when values_list is called with more than one field.')
-
-        self.select()
-        # 返回指定一个字段对应的迭代器
-        if flat and len(args) == 1:
-            values_field = args[0]
-            return (getattr(x, values_field) for x in self)
-        # 没有传入指定字段，返回全部
-        if not args:
-            args = self.fields_list
-        return ([getattr(x, y) for y in args] for x in self)
-
-    # query 查询语句
-    @property
-    def query(self):
+    def __str__(self):
         sql, params = self.sql_expr()
         return sql % params
-
-    # sql查询基础函数
-    def select(self):
-        if self.select_result is None:
-            sql, params = self.sql_expr()
-            self.select_result = Database.execute(self.model.__db_label__, sql, params).fetchall()
 
     # 根据当前筛选条件构建sql、params
     def sql_expr(self, method='select', update_dict=None):
@@ -297,7 +193,7 @@ class QuerySet():
 
         if update_dict and self.limit_dict:
             # 不支持切片更新
-            raise Error('Cannot update a query once a slice has been taken.')
+            raise TypeError('Cannot update a query once a slice has been taken.')
 
         # limit
         limit = self.limit_dict.get('limit')
@@ -326,37 +222,161 @@ class QuerySet():
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            sql = 'select %s from %s %s;' % (', '.join(self.fields_list), self.model.__db_table__, where_expr)
+            sql = 'select %s from %s %s;' % (', '.join(self.select), self.model.__db_table__, where_expr)
         return sql, tuple(params)
 
-    # 索引值查询
-    def get_index(self, index):
+    # clone
+    def clone(self):
+        obj = Query(self.model)
+        obj.filter_Q = self.filter_Q
+        obj.exclude_Q = self.exclude_Q
+        obj.order_fields = self.order_fields[:]
+        obj.limit_dict.update(self.limit_dict)
+        obj.select = self.select[:]
+        return obj
+
+
+class QuerySet():
+    def __init__(self, model, query=None):
+        self.model = model
+        self.select_result = None
+        self.query = query or Query(model)
+        self.fields_list = list(self.model.fields.keys())
+
+    # all函数，返回一个新的QuerySet对象（无筛选条件）
+    def all(self):
+        return self._clone()
+
+    # filter函数，返回一个新的QuerySet对象
+    def filter(self, *args, **kwargs):
+        return self._filter_or_exclude(False, *args, **kwargs)
+
+    # exclude函数，返回一个新的QuerySet对象
+    def exclude(self, *args, **kwargs):
+        return self._filter_or_exclude(True, *args, **kwargs)
+
+    # first
+    def first(self):
+        try:
+            return self.get_index(0)
+        except IndexError:
+            return None
+
+    # count
+    def count(self):
+        if self.select_result is not None:
+            return len(self.select_result)
+
+        # limit查询特殊处理
+        limit = self.query.limit_dict.get('limit', 0)
+        offset = self.query.limit_dict.get('offset', 0)
+        if limit or offset:
+            # 构建无limit_dict的query
+            count_query = self._clone()
+            count_query.query.limit_dict = None
+            all_count = count_query.count()
+            # 根据实际数量及偏移量计算count
+            if offset > all_count:
+                select_count = 0
+            elif offset + limit > all_count:
+                select_count = all_count - offset
+            else:
+                select_count = limit
+        else:
+            # 无数量限制，使用count查询
+            sql, params = self.query.sql_expr(method='count')
+            (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
+        return select_count
+
+    # update
+    def update(self, **kwargs):
+        if kwargs:
+            sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
+            Database.execute(self.model.__db_label__, sql, params)
+
+    # order_by函数，返回一个新的QuerySet对象
+    def order_by(self, *args):
+        obj = self._clone()
+        obj.query.order_fields = args
+        return obj
+
+    # create
+    def create(self, **kwargs):
+        obj = self.model(**kwargs)
+        obj.save()
+        return obj
+
+    # exists
+    def exists(self):
+        return bool(self.count())
+
+    # delete
+    def delete(self):
+        sql, params = self.query.sql_expr(method='delete')
+        Database.execute(self.model.__db_label__, sql, params)
+
+    # values
+    def values(self, *args):
+        # 字段检查
+        err_fields = set(args) - set(self.fields_list)
+        if err_fields:
+            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+
+        if not args:
+            args = self.fields_list
+        return self._clone(ValuesQuerySet, args)
+
+    # values_list
+    def values_list(self, *args, **kwargs):
+        # 字段检查
+        err_fields = set(args) - set(self.fields_list)
+        if err_fields:
+            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+
+        flat = kwargs.pop('flat', False)
+        # flat 只能返回一个字段列表
+        if flat and len(args) > 1:
+            raise TypeError('flat is not valid when values_list is called with more than one field.')
+
+        # 没有传入指定字段，返回全部
+        if not args:
+            args = self.fields_list
+        return self._clone(ValuesListQuerySet, args, flat)
+
+    # sql查询基础函数
+    def select(self):
+        if self.select_result is None:
+            sql, params = self.query.sql_expr()
+            self.select_result = Database.execute(self.model.__db_label__, sql, params).fetchall()
+
+    def base_index(self, index):
         if self.select_result is None:
             index_query = self[index:index + 1]
             index_query.select()
             index_value = index_query.select_result[0]
         else:
             index_value = self.select_result[index]
+        return index_value
+
+    # 索引值查询
+    def get_index(self, index):
+        index_value = self.base_index(index)
         return self.model(**dict(zip(self.fields_list, index_value)))
 
-    # clone
-    def _clone(self, **kwargs):
-        obj = QuerySet(self.model)
-        obj.filter_Q = self.filter_Q
-        obj.exclude_Q = self.exclude_Q
-        obj.order_fields = self.order_fields[:]
-        obj.limit_dict.update(self.limit_dict)
-
-        limit_dict = kwargs.pop('limit_dict', {})
-        obj.limit_dict.update(limit_dict)
-        order_fields = kwargs.pop('order_fields', [])
-        if order_fields:
-            obj.order_fields = order_fields
+    def _clone(self, klass=None, select=None, flat=False):
+        if klass is None:
+            klass = self.__class__
+        query = self.query.clone()
+        if select:
+            query.select = select[:]
+        if flat:
+            query.flat = flat
+        obj = klass(model=self.model, query=query)
         return obj
 
     # 根据传入的筛选条件，返回新的QuerySet对象
-    def new(self, negate, *args, **kwargs):
-        new_query = self._clone()
+    def _filter_or_exclude(self, negate, *args, **kwargs):
+        clone = self._clone()
         temp_Q = Q()
         for arg in args:
             temp_Q.add(arg, 'AND')
@@ -364,19 +384,20 @@ class QuerySet():
             temp_Q.children.append((k, v))
         if temp_Q:
             if negate:
-                new_query.exclude_Q.add(temp_Q, 'AND')
+                clone.query.exclude_Q.add(temp_Q, 'AND')
             else:
-                new_query.filter_Q.add(temp_Q, 'AND')
-        return new_query
+                clone.query.filter_Q.add(temp_Q, 'AND')
+        return clone
 
     # 自定义切片及索引取值
     def __getitem__(self, index):
         if isinstance(index, slice):
+            obj = self._clone()
             # 根据当前偏移量计算新的偏移量
             start = index.start or 0
             stop = index.stop
-            self_offset = self.limit_dict.get('offset', 0)
-            self_limit = self.limit_dict.get('limit')
+            self_offset = obj.query.limit_dict.get('offset', 0)
+            self_limit = obj.query.limit_dict.get('limit')
 
             limit = None
             sffset = self_offset + start
@@ -389,15 +410,14 @@ class QuerySet():
                 elif self_limit and sffset + limit > self_offset + self_limit:
                     limit = self_offset + self_limit - sffset
 
-            limit_dict = {}
-            limit_dict['offset'] = sffset
+            obj.query.limit_dict['offset'] = sffset
             if limit:
-                limit_dict['limit'] = limit
+                obj.query.limit_dict['limit'] = limit
             # 返回新的QuerySet对象
-            return self._clone(limit_dict=limit_dict)
+            return obj
         elif isinstance(index, int):
             if index < 0:
-                raise Error('Negative indexing is not supported.')
+                raise TypeError('Negative indexing is not supported.')
             # 取得对应索引值
             return self.get_index(index)
         else:
@@ -418,6 +438,49 @@ class QuerySet():
 
     def __repr__(self):
         return '<QuerySet Obj>'
+
+
+class ValuesQuerySet(QuerySet):
+
+    def __iter__(self):
+        self.select()
+        for value in self.select_result:
+            inst = {field: value[index] for index, field in enumerate(self.query.select)}
+            yield inst
+
+    def get_index(self, index):
+        index_value = self.base_index(index)
+        return {field: index_value[f_index] for f_index, field in enumerate(self.query.select)}
+
+    def __repr__(self):
+        return '<ValuesQuerySet Obj>'
+
+
+class ValuesListQuerySet(QuerySet):
+    def __init__(self, *args, **kwargs):
+        super(ValuesListQuerySet, self).__init__(*args, **kwargs)
+        self.flat = self.query.flat
+        self.select_field = self.query.select
+        if self.flat and len(self.select_field) != 1:
+            raise TypeError('flat is not valid when values_list is called with more than one field.')
+
+    def __iter__(self):
+        self.select()
+        for value in self.select_result:
+            if self.flat:
+                yield value[0]
+            else:
+                yield value
+
+    def get_index(self, index):
+        index_value = self.base_index(index)
+        if self.flat:
+            return index_value[0]
+        else:
+            return index_value
+
+    def __repr__(self):
+        return '<ValuesListQuerySet Obj>'
 
 
 class Manager():
