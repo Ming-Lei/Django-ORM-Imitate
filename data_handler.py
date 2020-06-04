@@ -112,7 +112,7 @@ class Q():
             raw_sql = ' ' + field + ' between %s and %s '
             params = value
         elif magic == 'in':
-            if isinstance(value, (QuerySet, ValuesQuerySet)):
+            if isinstance(value, (ValuesListQuerySet, ValuesQuerySet)):
                 subquery = value.query.clone()
                 # todo QuerySet id
                 if len(subquery.select) != 1:
