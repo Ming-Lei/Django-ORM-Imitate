@@ -114,13 +114,15 @@ class Q():
         elif magic == 'in':
             if isinstance(value, (ValuesListQuerySet, ValuesQuerySet)):
                 subquery = value.query.clone()
-                # todo QuerySet id
                 if len(subquery.select) != 1:
                     raise TypeError('Cannot use a multi-field %s as a filter value.'
                                     % value.__class__.__name__)
                 sub_sql, sub_params = subquery.sql_expr()
                 raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
                 params = sub_params
+            elif isinstance(value, QuerySet):
+                # todo pk
+                raise TypeError('Not currently supported QuerySet as a filter value.')
             else:
                 raw_sql = ' ' + field + ' in %s '
                 params = [tuple(value)]
@@ -147,14 +149,14 @@ class Q():
 class Query():
     def __init__(self, model):
         self.model = model
-        self.fields_list = list(self.model.fields.keys())
+        self.fields_list = self.model.field_list
 
         self.flat = False
         self.filter_Q = Q()
         self.exclude_Q = Q()
         self.limit_dict = {}
         self.order_fields = []
-        self.select = list(self.model.fields.keys())
+        self.select = self.fields_list
 
     def __str__(self):
         sql, params = self.sql_expr()
@@ -241,7 +243,7 @@ class QuerySet():
         self.model = model
         self.select_result = None
         self.query = query or Query(model)
-        self.fields_list = list(self.model.fields.keys())
+        self.fields_list = self.model.field_list
 
     # all函数，返回一个新的QuerySet对象（无筛选条件）
     def all(self):
@@ -317,31 +319,30 @@ class QuerySet():
 
     # values
     def values(self, *args):
-        # 字段检查
-        err_fields = set(args) - set(self.fields_list)
-        if err_fields:
-            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-
-        if not args:
-            args = self.fields_list
-        return self._clone(ValuesQuerySet, args)
+        fields_list = self.field_check(args)
+        return self._clone(ValuesQuerySet, fields_list)
 
     # values_list
     def values_list(self, *args, **kwargs):
         # 字段检查
-        err_fields = set(args) - set(self.fields_list)
-        if err_fields:
-            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-
+        fields_list = self.field_check(args)
         flat = kwargs.pop('flat', False)
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
+        return self._clone(ValuesListQuerySet, fields_list, flat)
+
+    # 字段检查
+    def field_check(self, fields_list):
+        err_fields = set(fields_list) - set(self.fields_list)
+        if err_fields:
+            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+
         # 没有传入指定字段，返回全部
-        if not args:
-            args = self.fields_list
-        return self._clone(ValuesListQuerySet, args, flat)
+        if not fields_list:
+            fields_list = self.fields_list
+        return fields_list
 
     # sql查询基础函数
     def select(self):
@@ -377,17 +378,25 @@ class QuerySet():
     # 根据传入的筛选条件，返回新的QuerySet对象
     def _filter_or_exclude(self, negate, *args, **kwargs):
         clone = self._clone()
-        temp_Q = Q()
-        for arg in args:
-            temp_Q.add(arg, 'AND')
-        for k, v in kwargs.items():
-            temp_Q.children.append((k, v))
-        if temp_Q:
-            if negate:
-                clone.query.exclude_Q.add(temp_Q, 'AND')
-            else:
-                clone.query.filter_Q.add(temp_Q, 'AND')
+        new_q = self._add_q(Q(*args, **kwargs))
+        if negate:
+            clone.query.exclude_Q.add(new_q, 'AND')
+        else:
+            clone.query.filter_Q.add(new_q, 'AND')
         return clone
+
+    def _add_q(self, q_object):
+        connector = q_object.connector
+        new_q = Q()
+        new_q.connector = connector
+        for child in q_object.children:
+            if isinstance(child, Q):
+                temp_q = self._add_q(child)
+                new_q.add(temp_q, connector)
+            else:
+                new_q.add(Q(child), connector)
+        return new_q
+
 
     # 自定义切片及索引取值
     def __getitem__(self, index):
@@ -522,18 +531,22 @@ class Manager():
 
 
 class MetaModel(type):
-    __db_table__ = None
-    __db_label__ = None
-    fields = {}
-
     def __init__(cls, name, bases, attrs):
         super(MetaModel, cls).__init__(name, bases, attrs)
-        fields = {}
+        if name == 'Model':
+            return
+
+        __db_table__ = attrs.get('__db_table__')
+        if not __db_table__:
+            raise TypeError('__db_table__ is not defined in %s ' % name)
+
+        field_list = []
+        primary_key = None
         for key, val in cls.__dict__.items():
             if isinstance(val, Field):
-                fields[key] = val
+                field_list.append(key)
                 setattr(cls, key, None)
-        cls.fields = fields
+        cls.field_list = field_list
         cls.attrs = attrs
         cls.objects = Manager(cls)
 
@@ -556,7 +569,7 @@ class Model(with_metaclass(MetaModel, dict)):
 
     def __init__(self, **kw):
         for k, v in kw.items():
-            if k in self.fields:
+            if k in self.field_list:
                 setattr(self, k, v)
             else:
                 raise TypeError("'%s' is an invalid keyword argument for this function" % k)
