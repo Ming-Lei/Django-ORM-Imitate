@@ -29,6 +29,7 @@ from data_handler import Model, Field
 class TestModel(Model):
     __db_table__ = 'test'
     __db_label__ = 'default'
+    id = Field(primary_key=True) # primary_key is optional
     a = Field()
     b = Field()
 ```
@@ -41,9 +42,11 @@ test = TestModel()
 test.a = 'john'
 test.b = 1
 test.save()
+print(test.id)
 
 test = TestModel(a='marry', b=2)
 test.save()
+print(test.pk)
 
 test = TestModel.objects.create(a='marry', b=3)
 
@@ -55,7 +58,7 @@ Query
 ```python
 from data_handler import Q
 
-filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), b__gte=1).exclude(b__in=[3, 4])
+filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), pk__gt=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 
 # select
@@ -88,6 +91,8 @@ Update
 ------
 
 ```python
+first.a = 'update'
+first.save()
 filter_result.update(b=1)
 ```
 
