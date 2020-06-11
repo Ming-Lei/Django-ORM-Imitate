@@ -4,7 +4,8 @@ import MySQLdb
 
 
 class Field():
-    pass
+    def __init__(self, **kw):
+        self.primary_key = kw.get('primary_key', False)
 
 
 class Q():
@@ -121,8 +122,14 @@ class Q():
                 raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
                 params = sub_params
             elif isinstance(value, QuerySet):
-                # todo pk
-                raise TypeError('Not currently supported QuerySet as a filter value.')
+                primary_key = value.model.__primary_key__
+                if not primary_key:
+                    raise TypeError('Primary key not defined in class: %s' % value.model.__class__.__name__)
+                subquery = value.query.clone()
+                subquery.select = [primary_key]
+                sub_sql, sub_params = subquery.sql_expr()
+                raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
+                params = sub_params
             else:
                 raw_sql = ' ' + field + ' in %s '
                 params = [tuple(value)]
@@ -293,12 +300,14 @@ class QuerySet():
     # update
     def update(self, **kwargs):
         if kwargs:
+            _, kwargs = self.pk_replace(**kwargs)
             sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
             Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         obj = self._clone()
+        args, _ = self.pk_replace(*args)
         obj.query.order_fields = args
         return obj
 
@@ -336,13 +345,35 @@ class QuerySet():
     # 字段检查
     def field_check(self, fields_list):
         err_fields = set(fields_list) - set(self.fields_list)
+        primary_key = self.model.__primary_key__
+        if 'pk' in err_fields:
+            if not primary_key:
+                raise TypeError('Primary key not defined in class: %s' % self.model.__class__.__name__)
+            err_fields = err_fields - {'pk'}
         if err_fields:
             raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
 
+        fields_list, _ = self.pk_replace(*fields_list)
         # 没有传入指定字段，返回全部
         if not fields_list:
             fields_list = self.fields_list
         return fields_list
+
+    def pk_replace(self, *args, **kwargs):
+        primary_key = self.model.__primary_key__
+        if not primary_key:
+            return args, kwargs
+
+        if 'pk' in args:
+            pk_index = args.index('pk')
+            args = args[:pk_index] + (primary_key,) + args[pk_index + 1:]
+        if '-pk' in args:
+            pk_index = args.index('-pk')
+            args = args[:pk_index] + ('-' + primary_key,) + args[pk_index + 1:]
+        if 'pk' in kwargs:
+            kwargs[primary_key] = kwargs['pk']
+            del kwargs['pk']
+        return args, kwargs
 
     # sql查询基础函数
     def select(self):
@@ -394,9 +425,16 @@ class QuerySet():
                 temp_q = self._add_q(child)
                 new_q.add(temp_q, connector)
             else:
-                new_q.add(Q(child), connector)
+                new_child = self.build_filter(child)
+                new_q.add(Q(new_child), connector)
         return new_q
 
+    def build_filter(self, filter_expr):
+        arg, value = filter_expr
+        lookup_splitted = arg.split('__')
+        if lookup_splitted[0] == 'pk':
+            lookup_splitted[0] = self.model.__primary_key__
+        return '__'.join(lookup_splitted), value
 
     # 自定义切片及索引取值
     def __getitem__(self, index):
@@ -544,11 +582,16 @@ class MetaModel(type):
         primary_key = None
         for key, val in cls.__dict__.items():
             if isinstance(val, Field):
+                if val.primary_key:
+                    if primary_key:
+                        raise TypeError('Cannot define more than 1 primary key in class: %s' % name)
+                    primary_key = key
                 field_list.append(key)
                 setattr(cls, key, None)
         cls.field_list = field_list
         cls.attrs = attrs
         cls.objects = Manager(cls)
+        cls.__primary_key__ = primary_key
 
 
 def with_metaclass(meta, *bases):
@@ -571,8 +614,24 @@ class Model(with_metaclass(MetaModel, dict)):
         for k, v in kw.items():
             if k in self.field_list:
                 setattr(self, k, v)
+            elif k == 'pk' and self.__primary_key__:
+                self._set_pk_val(v)
             else:
                 raise TypeError("'%s' is an invalid keyword argument for this function" % k)
+
+    def _get_pk_val(self):
+        primary_key = self.__primary_key__
+        if not primary_key:
+            return None
+        return getattr(self, primary_key)
+
+    def _set_pk_val(self, value):
+        primary_key = self.__primary_key__
+        if not primary_key:
+            raise TypeError('Primary key not defined in class: %s' % self.__class__.__name__)
+        return setattr(self, primary_key, value)
+
+    pk = property(_get_pk_val, _set_pk_val)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
@@ -591,9 +650,12 @@ class Model(with_metaclass(MetaModel, dict)):
         return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
 
     def save(self):
-        insert = 'insert ignore into %s(%s) values (%s);' % (
+        insert = 'replace into %s(%s) values (%s);' % (
             self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
-        return Database.execute(self.__db_label__, insert, self.__dict__.values())
+        cursor = Database.execute(self.__db_label__, insert, self.__dict__.values())
+        if self.__primary_key__:
+            last_rowid = cursor.lastrowid
+            self._set_pk_val(last_rowid)
 
 
 # 数据库调用
