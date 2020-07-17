@@ -131,8 +131,12 @@ class Q():
                 raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
                 params = sub_params
             else:
-                raw_sql = ' ' + field + ' in %s '
-                params = [tuple(value)]
+                if len(value) == 0:
+                    raw_sql = ' False '
+                    params = []
+                else:
+                    raw_sql = ' ' + field + ' in %s '
+                    params = [tuple(value)]
 
         return raw_sql, params
 
@@ -245,7 +249,7 @@ class Query():
         return obj
 
 
-class QuerySet():
+class QuerySet(object):
     def __init__(self, model, query=None):
         self.model = model
         self.select_result = None
