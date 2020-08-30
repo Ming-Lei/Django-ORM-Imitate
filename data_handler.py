@@ -286,12 +286,12 @@ class QuerySet(object):
         if limit or offset:
             # 构建无limit_dict的query
             count_query = self._clone()
-            count_query.query.limit_dict = None
+            count_query.query.limit_dict = {}
             all_count = count_query.count()
             # 根据实际数量及偏移量计算count
             if offset > all_count:
                 select_count = 0
-            elif offset + limit > all_count:
+            elif limit == 0 or offset + limit > all_count:
                 select_count = all_count - offset
             else:
                 select_count = limit
@@ -451,17 +451,17 @@ class QuerySet(object):
             self_limit = obj.query.limit_dict.get('limit')
 
             limit = None
-            sffset = self_offset + start
+            offset = self_offset + start
             if stop is not None:
                 limit = stop - start
 
-                if self_limit and sffset > self_offset + self_limit:
-                    sffset = self_offset
+                if self_limit and offset > self_offset + self_limit:
+                    offset = self_offset
                     limit = 0
-                elif self_limit and sffset + limit > self_offset + self_limit:
-                    limit = self_offset + self_limit - sffset
+                elif self_limit and offset + limit > self_offset + self_limit:
+                    limit = self_offset + self_limit - offset
 
-            obj.query.limit_dict['offset'] = sffset
+            obj.query.limit_dict['offset'] = offset
             if limit:
                 obj.query.limit_dict['limit'] = limit
             # 返回新的QuerySet对象
