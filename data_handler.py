@@ -653,13 +653,26 @@ class Model(with_metaclass(MetaModel, dict)):
         kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
         return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
 
-    def save(self):
-        insert = 'replace into %s(%s) values (%s);' % (
+    def _insert(self):
+        insert = 'insert into %s(%s) values (%s);' % (
             self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
         cursor = Database.execute(self.__db_label__, insert, self.__dict__.values())
         if self.__primary_key__:
             last_rowid = cursor.lastrowid
             self._set_pk_val(last_rowid)
+
+    def save(self):
+        if not self.__primary_key__ or not self.pk:
+            self._insert()
+        else:
+            cls = self.__class__
+            filtered = cls.objects.filter(pk=self.pk)
+            if filtered.exists():
+                temp_dict = dict({}, **self.__dict__)
+                del temp_dict[self.__primary_key__]
+                filtered.update(**temp_dict)
+            else:
+                self._insert()
 
 
 # 数据库调用
