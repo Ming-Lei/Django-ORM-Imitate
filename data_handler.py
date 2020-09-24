@@ -482,10 +482,10 @@ class QuerySet(object):
             yield inst
 
     def __nonzero__(self):
-        return bool(self.count())
+        return self.exists()
 
     def __bool__(self):
-        return bool(self.first())
+        return self.exists()
 
     def __repr__(self):
         return '<QuerySet Obj>'

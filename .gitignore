@@ -14,11 +14,7 @@
 /.vscode/
 /.ssh/
 /log/
-/mainsys/cache/
 /.config/
 !*.sh
-/mainsys/config.py
-/mainsys/dbconfig.py
 .thumbnails
-migrations/
 debug.text
