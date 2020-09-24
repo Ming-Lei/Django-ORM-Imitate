@@ -323,7 +323,7 @@ class QuerySet(object):
 
     # exists
     def exists(self):
-        return bool(self.count())
+        return bool(self.first())
 
     # delete
     def delete(self):
@@ -485,7 +485,7 @@ class QuerySet(object):
         return bool(self.count())
 
     def __bool__(self):
-        return bool(self.count())
+        return bool(self.first())
 
     def __repr__(self):
         return '<QuerySet Obj>'
