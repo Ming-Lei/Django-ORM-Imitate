@@ -167,6 +167,7 @@ class Query():
         self.exclude_Q = Q()
         self.limit_dict = {}
         self.order_fields = []
+        self.distinct = False
         self.select = self.fields_list
 
     def __str__(self):
@@ -183,7 +184,7 @@ class Query():
 
         if self.filter_Q:
             temp_sql, temp_params = self.filter_Q.sql_expr()
-            where_expr += '(' + temp_sql + ')'
+            where_expr += temp_sql
             params.extend(temp_params)
 
         if self.exclude_Q:
@@ -219,9 +220,7 @@ class Query():
             params.append(offset)
 
         # 构建不同操作的sql语句
-        if method == 'count':
-            sql = 'select count(*) from %s %s;' % (self.model.__db_table__, where_expr)
-        elif method == 'update' and update_dict:
+        if method == 'update' and update_dict:
             _keys = []
             _params = []
             for key, val in update_dict.items():
@@ -235,7 +234,15 @@ class Query():
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            sql = 'select %s from %s %s;' % (', '.join(self.select), self.model.__db_table__, where_expr)
+            select_field = ', '.join(self.select)
+            table = self.model.__db_table__
+            subquery = 'select %s %s from %s %s' % ('distinct' if self.distinct else '', select_field, table, where_expr)
+            if method == 'count' and self.distinct:
+                sql = 'select count(*) from (%s) subquery;' % subquery
+            elif method == 'count':
+                sql = 'select count(*) from %s %s;' % (table, where_expr)
+            else:
+                sql = subquery + ';'
         return sql, tuple(params)
 
     # clone
@@ -246,6 +253,7 @@ class Query():
         obj.order_fields = self.order_fields[:]
         obj.limit_dict.update(self.limit_dict)
         obj.select = self.select[:]
+        obj.distinct = self.distinct
         return obj
 
 
@@ -345,6 +353,18 @@ class QuerySet(object):
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
         return self._clone(ValuesListQuerySet, fields_list, flat)
+
+    # distinct
+    def distinct(self, *field_names):
+        if self.__class__ == QuerySet and field_names:
+            clone = self._clone(ValuesQuerySet)
+        else:
+            clone = self._clone()
+        if field_names:
+            field_names, _ = self.pk_replace(*field_names)
+            clone.query.select = field_names
+        clone.query.distinct = True
+        return clone
 
     # 字段检查
     def field_check(self, fields_list):
