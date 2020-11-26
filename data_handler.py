@@ -209,12 +209,14 @@ class Query():
             # 不支持切片更新
             raise TypeError('Cannot update a query once a slice has been taken.')
 
-        # limit
+        # limit offset
         limit = self.limit_dict.get('limit')
+        offset = self.limit_dict.get('offset')
+        if limit is None and offset is not None:
+            limit = 18446744073709551615
         if limit is not None:
             where_expr += ' limit %s '
             params.append(limit)
-        offset = self.limit_dict.get('offset')
         if offset is not None:
             where_expr += ' offset %s '
             params.append(offset)
