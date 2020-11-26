@@ -239,7 +239,7 @@ class Query():
             select_field = ', '.join(self.select)
             table = self.model.__db_table__
             subquery = 'select %s %s from %s %s' % ('distinct' if self.distinct else '', select_field, table, where_expr)
-            if method == 'count' and self.distinct:
+            if method == 'count' and (self.distinct or limit):
                 sql = 'select count(*) from (%s) subquery;' % subquery
             elif method == 'count':
                 sql = 'select count(*) from %s %s;' % (table, where_expr)
@@ -289,26 +289,8 @@ class QuerySet(object):
     def count(self):
         if self.select_result is not None:
             return len(self.select_result)
-
-        # limit查询特殊处理
-        limit = self.query.limit_dict.get('limit', 0)
-        offset = self.query.limit_dict.get('offset', 0)
-        if limit or offset:
-            # 构建无limit_dict的query
-            count_query = self._clone()
-            count_query.query.limit_dict = {}
-            all_count = count_query.count()
-            # 根据实际数量及偏移量计算count
-            if offset > all_count:
-                select_count = 0
-            elif limit == 0 or offset + limit > all_count:
-                select_count = all_count - offset
-            else:
-                select_count = limit
-        else:
-            # 无数量限制，使用count查询
-            sql, params = self.query.sql_expr(method='count')
-            (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
+        sql, params = self.query.sql_expr(method='count')
+        (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
         return select_count
 
     # update
