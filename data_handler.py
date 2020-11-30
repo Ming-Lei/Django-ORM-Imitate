@@ -150,11 +150,8 @@ class Q():
         return bool(self.children)
 
     def __repr__(self):
-        if self.negated:
-            return '(NOT (%s: %s))' % (self.connector, ', '.join([str(c) for c
-                                                                  in self.children]))
-        return '(%s: %s)' % (self.connector, ', '.join([str(c) for c in
-                                                        self.children]))
+        template = '(NOT (%s: %s))' if self.negated else '(%s: %s)'
+        return template % (self.connector, ', '.join(str(c) for c in self.children))
 
 
 class Query():
@@ -428,6 +425,7 @@ class QuerySet(object):
         connector = q_object.connector
         new_q = Q()
         new_q.connector = connector
+        new_q.negated = q_object.negated
         for child in q_object.children:
             if isinstance(child, Q):
                 temp_q = self._add_q(child)
