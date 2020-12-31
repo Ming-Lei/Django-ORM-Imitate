@@ -53,31 +53,69 @@ class Q():
         obj.negated = not self.negated
         return obj
 
+    def __len__(self):
+        return len(self.children)
+
+    def __nonzero__(self):
+        return bool(self.children)
+
+    def __bool__(self):
+        return bool(self.children)
+
+    def __repr__(self):
+        template = '(NOT (%s: %s))' if self.negated else '(%s: %s)'
+        return template % (self.connector, ', '.join(str(c) for c in self.children))
+
+
+class WhereNode():
+    def __init__(self, model):
+        self.model = model
+        self.fields_list = self.model.field_list
+        self.filter_Q = Q()
+        self.exclude_Q = Q()
+
+    def as_sql(self):
+        params = []
+        where_expr = ''
+
+        if self.filter_Q:
+            temp_sql, temp_params = self.sql_expr(self.filter_Q)
+            where_expr += temp_sql
+            params.extend(temp_params)
+
+        if self.exclude_Q:
+            temp_sql, temp_params = self.sql_expr(self.exclude_Q)
+            if params:
+                where_expr += ' and '
+            where_expr += ' not (' + temp_sql + ')'
+            params.extend(temp_params)
+        return where_expr, params
+
     # 构建sql查询语句
-    def _sql_expr(self):
+    def _sql_expr(self, q_query):
         sql_list = []
         params = []
-        for child in self.children:
+        for child in q_query.children:
             if not isinstance(child, Q):
                 temp_sql, temp_params = self.magic_query(child)
                 sql_list.append(temp_sql)
                 params.extend(temp_params)
             else:
-                temp_sql, temp_params = child._sql_expr()
+                temp_sql, temp_params = self._sql_expr(child)
                 if temp_sql and temp_params:
                     raw_sql = child.connector.join(temp_sql)
                     if child.negated:
                         raw_sql = ' not ( ' + raw_sql + ' ) '
-                    elif child.connector != self.connector:
+                    elif child.connector != q_query.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
                     params.extend(temp_params)
         return sql_list, params
 
     # 取得对应sql及参数
-    def sql_expr(self):
-        sql_list, params = self._sql_expr()
-        return self.connector.join(sql_list), params
+    def sql_expr(self, q_query):
+        sql_list, params = self._sql_expr(q_query)
+        return q_query.connector.join(sql_list), params
 
     # 处理双下划线特殊查询
     def magic_query(self, child_query):
@@ -140,18 +178,14 @@ class Q():
 
         return raw_sql, params
 
-    def __len__(self):
-        return len(self.children)
-
-    def __nonzero__(self):
-        return bool(self.children)
+    def _add_q(self, q_object, filter=True):
+        if filter:
+            self.filter_Q.add(q_object, 'AND')
+        else:
+            self.exclude_Q.add(q_object, 'AND')
 
     def __bool__(self):
-        return bool(self.children)
-
-    def __repr__(self):
-        template = '(NOT (%s: %s))' if self.negated else '(%s: %s)'
-        return template % (self.connector, ', '.join(str(c) for c in self.children))
+        return bool(self.filter_Q or self.exclude_Q)
 
 
 class Query():
@@ -160,8 +194,7 @@ class Query():
         self.fields_list = self.model.field_list
 
         self.flat = False
-        self.filter_Q = Q()
-        self.exclude_Q = Q()
+        self.where = WhereNode(model)
         self.limit_dict = {}
         self.order_fields = []
         self.distinct = False
@@ -176,20 +209,11 @@ class Query():
         params = []
         where_expr = ''
 
-        if self.filter_Q or self.exclude_Q:
+        if self.where:
             where_expr += ' where '
-
-        if self.filter_Q:
-            temp_sql, temp_params = self.filter_Q.sql_expr()
-            where_expr += temp_sql
-            params.extend(temp_params)
-
-        if self.exclude_Q:
-            temp_sql, temp_params = self.exclude_Q.sql_expr()
-            if params:
-                where_expr += ' and '
-            where_expr += ' not (' + temp_sql + ')'
-            params.extend(temp_params)
+            where_sql, where_params = self.where.as_sql()
+            where_expr += where_sql
+            params.extend(where_params)
 
         if self.order_fields:
             where_expr += ' order by '
@@ -235,7 +259,8 @@ class Query():
         else:
             select_field = ', '.join(self.select)
             table = self.model.__db_table__
-            subquery = 'select %s %s from %s %s' % ('distinct' if self.distinct else '', select_field, table, where_expr)
+            subquery = 'select %s %s from %s %s' % (
+                'distinct' if self.distinct else '', select_field, table, where_expr)
             if method == 'count' and (self.distinct or limit):
                 sql = 'select count(*) from (%s) subquery;' % subquery
             elif method == 'count':
@@ -247,8 +272,7 @@ class Query():
     # clone
     def clone(self):
         obj = Query(self.model)
-        obj.filter_Q = self.filter_Q
-        obj.exclude_Q = self.exclude_Q
+        obj.where = self.where
         obj.order_fields = self.order_fields[:]
         obj.limit_dict.update(self.limit_dict)
         obj.select = self.select[:]
@@ -416,9 +440,9 @@ class QuerySet(object):
         clone = self._clone()
         new_q = self._add_q(Q(*args, **kwargs))
         if negate:
-            clone.query.exclude_Q.add(new_q, 'AND')
+            clone.query.where._add_q(new_q, False)
         else:
-            clone.query.filter_Q.add(new_q, 'AND')
+            clone.query.where._add_q(new_q, True)
         return clone
 
     def _add_q(self, q_object):
