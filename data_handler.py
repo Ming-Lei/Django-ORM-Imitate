@@ -187,6 +187,9 @@ class WhereNode():
     def __bool__(self):
         return bool(self.filter_Q or self.exclude_Q)
 
+    def __nonzero__(self):
+        return bool(self.filter_Q or self.exclude_Q)
+
 
 class Query():
     def __init__(self, model):
