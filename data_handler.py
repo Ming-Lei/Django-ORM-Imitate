@@ -276,6 +276,7 @@ class Query():
     def clone(self):
         obj = Query(self.model)
         obj.where = self.where
+        obj.flat = self.flat
         obj.order_fields = self.order_fields[:]
         obj.limit_dict.update(self.limit_dict)
         obj.select = self.select[:]
