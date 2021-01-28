@@ -109,7 +109,7 @@ class WhereNode():
                     elif child.connector != q_query.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
-                    params.extend(temp_params) if temp_params else None
+                    params.extend(temp_params)
         return sql_list, params
 
     # 取得对应sql及参数
