@@ -102,14 +102,14 @@ class WhereNode():
                 params.extend(temp_params)
             else:
                 temp_sql, temp_params = self._sql_expr(child)
-                if temp_sql and temp_params:
+                if temp_sql:
                     raw_sql = child.connector.join(temp_sql)
                     if child.negated:
                         raw_sql = ' not ( ' + raw_sql + ' ) '
                     elif child.connector != q_query.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
-                    params.extend(temp_params)
+                    params.extend(temp_params) if temp_params else None
         return sql_list, params
 
     # 取得对应sql及参数
