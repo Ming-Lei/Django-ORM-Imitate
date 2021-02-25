@@ -3,12 +3,70 @@ import MySQLdb
 # py2 mysql-python  py3 mysqlclient
 
 
-class Field():
+class Field:
     def __init__(self, **kw):
         self.primary_key = kw.get('primary_key', False)
 
 
-class Q():
+class Combinable:
+
+    @staticmethod
+    def _combine(lhs, connector, rhs):
+        return CombinedExpression(lhs, connector, rhs)
+
+    def __add__(self, other):
+        return self._combine(self, ' + ', other)
+
+    def __sub__(self, other):
+        return self._combine(self, ' - ', other)
+
+    def __mul__(self, other):
+        return self._combine(self, ' * ', other)
+
+    def __truediv__(self, other):
+        return self._combine(self, ' / ', other)
+
+    def __div__(self, other):
+        return self._combine(self, ' / ', other)
+
+    def __mod__(self, other):
+        return self._combine(self, ' %% ', other)
+
+    def __pow__(self, other):
+        return self._combine(self, ' ~ ', other)
+
+    def __radd__(self, other):
+        return self._combine(other, ' + ', self)
+
+    def __rsub__(self, other):
+        return self._combine(other, ' - ', self)
+
+    def __rmul__(self, other):
+        return self._combine(other, ' * ', self)
+
+    def __rtruediv__(self, other):
+        return self._combine(other, ' / ', self)
+
+    def __rmod__(self, other):
+        return self._combine(other, ' %% ', self)
+
+    def __rpow__(self, other):
+        return self._combine(other, ' ^ ', self)
+
+
+class F(Combinable):
+    def __init__(self, name):
+        self.name = name
+
+
+class CombinedExpression(Combinable):
+    def __init__(self, lhs, connector, rhs):
+        self.connector = connector
+        self.lhs = lhs
+        self.rhs = rhs
+
+
+class Q:
     def __init__(self, *args, **kwargs):
         self.children = list(args) + list(kwargs.items())
         self.connector = 'AND'
@@ -67,7 +125,7 @@ class Q():
         return template % (self.connector, ', '.join(str(c) for c in self.children))
 
 
-class WhereNode():
+class WhereNode:
     def __init__(self, model):
         self.model = model
         self.fields_list = self.model.field_list
@@ -117,6 +175,24 @@ class WhereNode():
         sql_list, params = self._sql_expr(q_query)
         return q_query.connector.join(sql_list), params
 
+    def _f_expr(self, value):
+        if isinstance(value, F):
+            fields_list = ModelCheck(self.model).field_check([value.name])
+            return fields_list[0], []
+        params = []
+        raw_sql_list = []
+        for temp_f in [value.lhs, value.rhs]:
+            if isinstance(temp_f, (F, CombinedExpression)):
+                temp_sql, temp_params = self._f_expr(temp_f)
+                if hasattr(temp_f, 'connector') and temp_f.connector != value.connector:
+                    temp_sql = '(' + temp_sql + ')'
+            else:
+                temp_sql, temp_params = '%s', [temp_f]
+            raw_sql_list.append(temp_sql)
+            params.extend(temp_params)
+        raw_sql = value.connector.join(raw_sql_list)
+        return raw_sql, params
+
     # 处理双下划线特殊查询
     def magic_query(self, child_query):
         correspond_dict = {
@@ -128,6 +204,11 @@ class WhereNode():
             'contains': ' like %%%s%% ',
             'startswith': ' like %s%% ',
             'endswith': ' like %%%s ',
+        }
+        F_correspond_dict = {
+            'contains': ' like CONCAT("%%%%", %s, "%%%%") ',
+            'startswith': ' like CONCAT(%s, "%%%%") ',
+            'endswith': ' like CONCAT("%%%%", %s) ',
         }
 
         raw_sql = ''
@@ -142,6 +223,13 @@ class WhereNode():
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
             params = [value]
+            if isinstance(value, (F, CombinedExpression)):
+                temp_raw_sql, value = self._f_expr(value)
+                if magic in F_correspond_dict:
+                    temp_sql = F_correspond_dict.get(magic)
+                    raw_sql = ' ' + field + temp_sql
+                raw_sql = raw_sql % temp_raw_sql
+                params = value
         elif magic == 'isnull':
             if value:
                 raw_sql = ' ' + field + ' is null '
@@ -191,7 +279,7 @@ class WhereNode():
         return bool(self.filter_Q or self.exclude_Q)
 
 
-class Query():
+class Query:
     def __init__(self, model):
         self.model = model
         self.fields_list = self.model.field_list
@@ -252,6 +340,7 @@ class Query():
             for key, val in update_dict.items():
                 if key not in self.fields_list:
                     continue
+                # todo F
                 _keys.append(key)
                 _params.append(val)
             params = _params + params
@@ -321,14 +410,14 @@ class QuerySet(object):
     # update
     def update(self, **kwargs):
         if kwargs:
-            _, kwargs = self.pk_replace(**kwargs)
+            _, kwargs = ModelCheck(self.model).pk_replace(**kwargs)
             sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
             Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         obj = self._clone()
-        args, _ = self.pk_replace(*args)
+        args, _ = ModelCheck(self.model).pk_replace(*args)
         obj.query.order_fields = args
         return obj
 
@@ -349,13 +438,13 @@ class QuerySet(object):
 
     # values
     def values(self, *args):
-        fields_list = self.field_check(args)
+        fields_list = ModelCheck(self.model).field_check(args)
         return self._clone(ValuesQuerySet, fields_list)
 
     # values_list
     def values_list(self, *args, **kwargs):
         # 字段检查
-        fields_list = self.field_check(args)
+        fields_list = ModelCheck(self.model).field_check(args)
         flat = kwargs.pop('flat', False)
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
@@ -370,43 +459,10 @@ class QuerySet(object):
         else:
             clone = self._clone()
         if field_names:
-            field_names, _ = self.pk_replace(*field_names)
+            field_names, _ = ModelCheck(self.model).pk_replace(*field_names)
             clone.query.select = field_names
         clone.query.distinct = True
         return clone
-
-    # 字段检查
-    def field_check(self, fields_list):
-        err_fields = set(fields_list) - set(self.fields_list)
-        primary_key = self.model.__primary_key__
-        if 'pk' in err_fields:
-            if not primary_key:
-                raise TypeError('Primary key not defined in class: %s' % self.model.__class__.__name__)
-            err_fields = err_fields - {'pk'}
-        if err_fields:
-            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
-
-        fields_list, _ = self.pk_replace(*fields_list)
-        # 没有传入指定字段，返回全部
-        if not fields_list:
-            fields_list = self.fields_list
-        return fields_list
-
-    def pk_replace(self, *args, **kwargs):
-        primary_key = self.model.__primary_key__
-        if not primary_key:
-            return args, kwargs
-
-        if 'pk' in args:
-            pk_index = args.index('pk')
-            args = args[:pk_index] + (primary_key,) + args[pk_index + 1:]
-        if '-pk' in args:
-            pk_index = args.index('-pk')
-            args = args[:pk_index] + ('-' + primary_key,) + args[pk_index + 1:]
-        if 'pk' in kwargs:
-            kwargs[primary_key] = kwargs['pk']
-            del kwargs['pk']
-        return args, kwargs
 
     # sql查询基础函数
     def select(self):
@@ -466,7 +522,7 @@ class QuerySet(object):
     def build_filter(self, filter_expr):
         arg, value = filter_expr
         lookup_splitted = arg.split('__')
-        if lookup_splitted[0] == 'pk':
+        if lookup_splitted[0] == 'pk' and self.model.__primary_key__:
             lookup_splitted[0] = self.model.__primary_key__
         return '__'.join(lookup_splitted), value
 
@@ -564,7 +620,46 @@ class ValuesListQuerySet(QuerySet):
         return '<ValuesListQuerySet Obj>'
 
 
-class Manager():
+class ModelCheck:
+    def __init__(self, model):
+        self.model = model
+        self.fields_list = self.model.field_list
+
+    # 字段检查
+    def field_check(self, fields_list):
+        err_fields = set(fields_list) - set(self.fields_list)
+        primary_key = self.model.__primary_key__
+        if 'pk' in err_fields:
+            if not primary_key:
+                raise TypeError('Primary key not defined in class: %s' % self.model.__class__.__name__)
+            err_fields = err_fields - {'pk'}
+        if err_fields:
+            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+
+        fields_list, _ = self.pk_replace(*fields_list)
+        # 没有传入指定字段，返回全部
+        if not fields_list:
+            fields_list = self.fields_list
+        return fields_list
+
+    def pk_replace(self, *args, **kwargs):
+        primary_key = self.model.__primary_key__
+        if not primary_key:
+            return args, kwargs
+
+        if 'pk' in args:
+            pk_index = args.index('pk')
+            args = args[:pk_index] + (primary_key,) + args[pk_index + 1:]
+        if '-pk' in args:
+            pk_index = args.index('-pk')
+            args = args[:pk_index] + ('-' + primary_key,) + args[pk_index + 1:]
+        if 'pk' in kwargs:
+            kwargs[primary_key] = kwargs['pk']
+            del kwargs['pk']
+        return args, kwargs
+
+
+class Manager:
     def __init__(self, model):
         self.model = model
 
@@ -706,7 +801,7 @@ class Model(with_metaclass(MetaModel, dict)):
 
 
 # 数据库调用
-class Database():
+class Database:
     autocommit = True
     conn = {}
     db_config = {}
