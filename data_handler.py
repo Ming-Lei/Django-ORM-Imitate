@@ -47,6 +47,9 @@ class Combinable:
     def __rtruediv__(self, other):
         return self._combine(other, ' / ', self)
 
+    def __rdiv__(self, other):
+        return self._combine(other, ' / ', self)
+
     def __rmod__(self, other):
         return self._combine(other, ' %% ', self)
 
