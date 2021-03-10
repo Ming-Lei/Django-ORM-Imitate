@@ -178,7 +178,7 @@ class WhereNode:
         sql_list, params = self._sql_expr(q_query)
         return q_query.connector.join(sql_list), params
 
-    def _f_expr(self, value):
+    def f_expr(self, value):
         if isinstance(value, F):
             fields_list = ModelCheck(self.model).field_check([value.name])
             return fields_list[0], []
@@ -186,7 +186,7 @@ class WhereNode:
         raw_sql_list = []
         for temp_f in [value.lhs, value.rhs]:
             if isinstance(temp_f, (F, CombinedExpression)):
-                temp_sql, temp_params = self._f_expr(temp_f)
+                temp_sql, temp_params = self.f_expr(temp_f)
                 if hasattr(temp_f, 'connector') and temp_f.connector != value.connector:
                     temp_sql = '(' + temp_sql + ')'
             else:
@@ -227,7 +227,7 @@ class WhereNode:
             raw_sql = ' ' + field + temp_sql
             params = [value]
             if isinstance(value, (F, CombinedExpression)):
-                temp_raw_sql, value = self._f_expr(value)
+                temp_raw_sql, value = self.f_expr(value)
                 if magic in F_correspond_dict:
                     temp_sql = F_correspond_dict.get(magic)
                     raw_sql = ' ' + field + temp_sql
@@ -343,12 +343,16 @@ class Query:
             for key, val in update_dict.items():
                 if key not in self.fields_list:
                     continue
-                # todo F
-                _keys.append(key)
-                _params.append(val)
+                temp_key = ' = %s'
+                temp_params = [val]
+                if isinstance(val, (F, CombinedExpression)):
+                    f_sql, f_params = self.where.f_expr(val)
+                    temp_key = ' = ' + f_sql
+                    temp_params = f_params
+                _keys.append(key + temp_key)
+                _params.extend(temp_params)
             params = _params + params
-            sql = 'update %s set %s %s;' % (
-                self.model.__db_table__, ', '.join([key + ' = %s' for key in _keys]), where_expr)
+            sql = 'update %s set %s %s;' % (self.model.__db_table__, ', '.join(_keys), where_expr)
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
