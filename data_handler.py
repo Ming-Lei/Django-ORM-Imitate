@@ -275,6 +275,12 @@ class WhereNode:
         else:
             self.exclude_Q.add(q_object, 'AND')
 
+    def clone(self):
+        clone = WhereNode(self.model)
+        clone.filter_Q.add(self.filter_Q, 'AND')
+        clone.exclude_Q.add(self.exclude_Q, 'AND')
+        return clone
+
     def __bool__(self):
         return bool(self.filter_Q or self.exclude_Q)
 
@@ -371,7 +377,7 @@ class Query:
     # clone
     def clone(self):
         obj = Query(self.model)
-        obj.where = self.where
+        obj.where = self.where.clone()
         obj.flat = self.flat
         obj.order_fields = self.order_fields[:]
         obj.limit_dict.update(self.limit_dict)
