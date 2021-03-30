@@ -709,6 +709,15 @@ class Manager:
     def values_list(self, *args):
         return self.get_queryset().values_list(*args)
 
+    def bulk_create(self, objs):
+        fields = self.model.field_list
+        f = lambda obj, field: getattr(obj, field, None)
+        items = [f(obj, field) for obj in objs for field in fields]
+        obj_value = '(%s)' % ', '.join(['%s'] * len(fields))
+        insert = 'insert into %s(%s) values %s;' % (
+            self.model.__db_table__, ', '.join(fields), ', '.join([obj_value] * len(objs)))
+        Database.execute(self.model.__db_label__, insert, items)
+
 
 class MetaModel(type):
     def __init__(cls, name, bases, attrs):
