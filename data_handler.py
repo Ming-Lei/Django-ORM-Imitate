@@ -1,6 +1,5 @@
 # coding: utf-8
-import MySQLdb
-# py2 mysql-python  py3 mysqlclient
+import aiomysql
 
 
 class Field:
@@ -26,9 +25,6 @@ class Combinable:
     def __truediv__(self, other):
         return self._combine(self, ' / ', other)
 
-    def __div__(self, other):
-        return self._combine(self, ' / ', other)
-
     def __mod__(self, other):
         return self._combine(self, ' %% ', other)
 
@@ -45,9 +41,6 @@ class Combinable:
         return self._combine(other, ' * ', self)
 
     def __rtruediv__(self, other):
-        return self._combine(other, ' / ', self)
-
-    def __rdiv__(self, other):
         return self._combine(other, ' / ', self)
 
     def __rmod__(self, other):
@@ -116,9 +109,6 @@ class Q:
 
     def __len__(self):
         return len(self.children)
-
-    def __nonzero__(self):
-        return bool(self.children)
 
     def __bool__(self):
         return bool(self.children)
@@ -284,9 +274,6 @@ class WhereNode:
     def __bool__(self):
         return bool(self.filter_Q or self.exclude_Q)
 
-    def __nonzero__(self):
-        return bool(self.filter_Q or self.exclude_Q)
-
 
 class Query:
     def __init__(self, model):
@@ -406,26 +393,27 @@ class QuerySet(object):
         return self._filter_or_exclude(True, *args, **kwargs)
 
     # first
-    def first(self):
+    async def first(self):
         try:
-            return self.get_index(0)
+            return await self.get_index(0)
         except IndexError:
             return None
 
     # count
-    def count(self):
+    async def count(self):
         if self.select_result is not None:
             return len(self.select_result)
         sql, params = self.query.sql_expr(method='count')
-        (select_count,) = Database.execute(self.model.__db_label__, sql, params).fetchone()
+        cursor = await Database.execute(self.model.__db_label__, sql, params)
+        (select_count,) = await cursor.fetchone()
         return select_count
 
     # update
-    def update(self, **kwargs):
+    async def update(self, **kwargs):
         if kwargs:
             _, kwargs = ModelCheck(self.model).pk_replace(**kwargs)
             sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
-            Database.execute(self.model.__db_label__, sql, params)
+            await Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
@@ -435,19 +423,19 @@ class QuerySet(object):
         return obj
 
     # create
-    def create(self, **kwargs):
+    async def create(self, **kwargs):
         obj = self.model(**kwargs)
-        obj.save()
+        await obj.save()
         return obj
 
     # exists
-    def exists(self):
-        return bool(self.first())
+    async def exists(self):
+        return bool(await self.first())
 
     # delete
-    def delete(self):
+    async def delete(self):
         sql, params = self.query.sql_expr(method='delete')
-        Database.execute(self.model.__db_label__, sql, params)
+        await Database.execute(self.model.__db_label__, sql, params)
 
     # values
     def values(self, *args):
@@ -478,23 +466,24 @@ class QuerySet(object):
         return clone
 
     # sql查询基础函数
-    def select(self):
+    async def select(self):
         if self.select_result is None:
             sql, params = self.query.sql_expr()
-            self.select_result = Database.execute(self.model.__db_label__, sql, params).fetchall()
+            cursor = await Database.execute(self.model.__db_label__, sql, params)
+            self.select_result = await cursor.fetchall()
 
-    def base_index(self, index):
+    async def base_index(self, index):
         if self.select_result is None:
             index_query = self[index:index + 1]
-            index_query.select()
+            await index_query.select()
             index_value = index_query.select_result[0]
         else:
             index_value = self.select_result[index]
         return index_value
 
     # 索引值查询
-    def get_index(self, index):
-        index_value = self.base_index(index)
+    async def get_index(self, index):
+        index_value = await self.base_index(index)
         return self.model(**dict(zip(self.fields_list, index_value)))
 
     def _clone(self, klass=None, select=None, flat=False):
@@ -574,14 +563,17 @@ class QuerySet(object):
             return None
 
     # 返回自定义迭代器
-    def __iter__(self):
-        self.select()
-        for value in self.select_result:
-            inst = self.model(**dict(zip(self.fields_list, value)))
-            yield inst
+    def _iter(self):
+        yield from self.select().__await__()
+        return [self.model(**dict(zip(self.fields_list, value))) for value in self.select_result]
 
-    def __nonzero__(self):
-        return self.exists()
+    def __iter__(self):
+        if not self.select_result:
+            raise Exception("RuntimeWarning: coroutine 'QuerySet' was never awaited")
+        return self._iter()
+
+    def __await__(self):
+        return self._iter()
 
     def __bool__(self):
         return self.exists()
@@ -592,14 +584,21 @@ class QuerySet(object):
 
 class ValuesQuerySet(QuerySet):
 
-    def __iter__(self):
-        self.select()
-        for value in self.select_result:
-            inst = {field: value[index] for index, field in enumerate(self.query.select)}
-            yield inst
+    # 返回自定义迭代器
+    def _iter(self):
+        yield from self.select().__await__()
+        return [{field: value[index] for index, field in enumerate(self.query.select)} for value in self.select_result]
 
-    def get_index(self, index):
-        index_value = self.base_index(index)
+    def __iter__(self):
+        if not self.select_result:
+            raise Exception("RuntimeWarning: coroutine 'ValuesQuerySet' was never awaited")
+        return self._iter()
+
+    def __await__(self):
+        return self._iter()
+
+    async def get_index(self, index):
+        index_value = await self.base_index(index)
         return {field: index_value[f_index] for f_index, field in enumerate(self.query.select)}
 
     def __repr__(self):
@@ -614,16 +613,23 @@ class ValuesListQuerySet(QuerySet):
         if self.flat and len(self.select_field) != 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
-    def __iter__(self):
-        self.select()
-        for value in self.select_result:
-            if self.flat:
-                yield value[0]
-            else:
-                yield value
+    # 返回自定义迭代器
+    def _iter(self):
+        yield from self.select().__await__()
+        if self.flat:
+            return [value[0] for value in self.select_result]
+        return [value for value in self.select_result]
 
-    def get_index(self, index):
-        index_value = self.base_index(index)
+    def __iter__(self):
+        if not self.select_result:
+            raise Exception("RuntimeWarning: coroutine 'ValuesListQuerySet' was never awaited")
+        return self._iter()
+
+    def __await__(self):
+        return self._iter()
+
+    async def get_index(self, index):
+        index_value = await self.base_index(index)
         if self.flat:
             return index_value[0]
         else:
@@ -682,8 +688,8 @@ class Manager:
     def all(self):
         return self.get_queryset()
 
-    def count(self):
-        return self.get_queryset().count()
+    async def count(self):
+        return await self.get_queryset().count()
 
     def filter(self, *args, **kwargs):
         return self.get_queryset().filter(*args, **kwargs)
@@ -691,14 +697,14 @@ class Manager:
     def exclude(self, *args, **kwargs):
         return self.get_queryset().exclude(*args, **kwargs)
 
-    def first(self):
-        return self.get_queryset().first()
+    async def first(self):
+        return await self.get_queryset().first()
 
-    def exists(self):
-        return self.get_queryset().exists()
+    async def exists(self):
+        return await self.get_queryset().exists()
 
-    def create(self, **kwargs):
-        return self.get_queryset().create(**kwargs)
+    async def create(self, **kwargs):
+        return await self.get_queryset().create(**kwargs)
 
     def order_by(self, *args):
         return self.get_queryset().order_by(*args)
@@ -709,14 +715,14 @@ class Manager:
     def values_list(self, *args):
         return self.get_queryset().values_list(*args)
 
-    def bulk_create(self, objs):
+    async def bulk_create(self, objs):
         fields = self.model.field_list
         f = lambda obj, field: getattr(obj, field, None)
         items = [f(obj, field) for obj in objs for field in fields]
         obj_value = '(%s)' % ', '.join(['%s'] * len(fields))
         insert = 'insert into %s(%s) values %s;' % (
             self.model.__db_table__, ', '.join(fields), ', '.join([obj_value] * len(objs)))
-        Database.execute(self.model.__db_label__, insert, items)
+        await Database.execute(self.model.__db_label__, insert, items)
 
 
 class MetaModel(type):
@@ -745,28 +751,14 @@ class MetaModel(type):
         cls.__primary_key__ = primary_key
 
 
-def with_metaclass(meta, *bases):
-    # 兼容2和3的元类  见 py2 future.utils.with_metaclass
-    class metaclass(meta):
-        __call__ = type.__call__
-        __init__ = type.__init__
-
-        def __new__(cls, name, this_bases, d):
-            if this_bases is None:
-                return type.__new__(cls, name, (), d)
-            return meta(name, bases, d)
-
-    return metaclass('temporary_class', None, {})
-
-
-class Model(with_metaclass(MetaModel, dict)):
+class Model(metaclass=MetaModel):
 
     def __init__(self, **kw):
         for k, v in kw.items():
             if k in self.field_list:
                 setattr(self, k, v)
             elif k == 'pk' and self.__primary_key__:
-                self._set_pk_val(v)
+                self.pk = v
             else:
                 raise TypeError("'%s' is an invalid keyword argument for this function" % k)
 
@@ -780,15 +772,12 @@ class Model(with_metaclass(MetaModel, dict)):
         primary_key = self.__primary_key__
         if not primary_key:
             raise TypeError('Primary key not defined in class: %s' % self.__class__.__name__)
-        return setattr(self, primary_key, value)
+        setattr(self, primary_key, value)
 
     pk = property(_get_pk_val, _set_pk_val)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
-
-    def __nonzero__(self):
-        return bool(self.__dict__)
 
     def __bool__(self):
         return bool(self.__dict__)
@@ -800,26 +789,26 @@ class Model(with_metaclass(MetaModel, dict)):
         kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
         return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
 
-    def _insert(self):
+    async def _insert(self):
         insert = 'insert into %s(%s) values (%s);' % (
             self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
-        cursor = Database.execute(self.__db_label__, insert, self.__dict__.values())
+        cursor = await Database.execute(self.__db_label__, insert, tuple(self.__dict__.values()))
         if self.__primary_key__:
             last_rowid = cursor.lastrowid
-            self._set_pk_val(last_rowid)
+            self.pk = last_rowid
 
-    def save(self):
+    async def save(self):
         if not self.__primary_key__ or not self.pk:
-            self._insert()
+            await self._insert()
         else:
             cls = self.__class__
             filtered = cls.objects.filter(pk=self.pk)
-            if filtered.exists():
+            if await filtered.exists():
                 temp_dict = dict({}, **self.__dict__)
                 del temp_dict[self.__primary_key__]
-                filtered.update(**temp_dict)
+                await filtered.update(**temp_dict)
             else:
-                self._insert()
+                await self._insert()
 
 
 # 数据库调用
@@ -829,39 +818,41 @@ class Database:
     db_config = {}
 
     @classmethod
-    def connect(cls, **databases):
+    async def connect(cls, **databases):
         for db_label, db_config in databases.items():
-            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'),
-                                                 port=int(db_config.get('port', 3306)),
-                                                 user=db_config.get('user', 'root'),
-                                                 passwd=db_config.get('password', ''),
-                                                 db=db_config.get('database', 'test'),
-                                                 charset=db_config.get('charset', 'utf8'))
-            cls.conn[db_label].autocommit(cls.autocommit)
+            cls.conn[db_label] = await aiomysql.create_pool(
+                minsize=int(db_config.get('minsize', 2)),
+                maxsize=int(db_config.get('maxsize', 5)),
+                host=db_config.get('host', 'localhost'),
+                port=int(db_config.get('port', 3306)),
+                user=db_config.get('user', 'root'),
+                password=db_config.get('password', ''),
+                db=db_config.get('database', 'test'),
+                autocommit=True)
         cls.db_config.update(databases)
 
     @classmethod
-    def get_conn(cls, db_label):
-        if not cls.conn[db_label] or not cls.conn[db_label].open:
-            cls.connect(**cls.db_config)
-        try:
-            cls.conn[db_label].ping()
-        except MySQLdb.OperationalError:
-            cls.connect(**cls.db_config)
-        return cls.conn[db_label]
+    async def get_conn(cls, db_label):
+        if not cls.conn[db_label]:
+            await cls.connect(**cls.db_config)
+        db_conn = await cls.conn[db_label].acquire()
+        return db_conn
 
     @classmethod
-    def execute(cls, db_label, *args):
-        db_conn = cls.get_conn(db_label)
-        cursor = db_conn.cursor()
-        cursor.execute(*args)
-        return cursor
+    async def execute(cls, db_label, *args):
+        db_conn = await cls.get_conn(db_label)
+        cursor = await db_conn.cursor()
+        try:
+            await cursor.execute(*args)
+            return cursor
+        except:
+            pass
+        finally:
+            if cursor:
+                await cursor.close()
+            # 释放掉conn,将连接放回到连接池中
+            await cls.conn[db_label].release(db_conn)
 
-    def __del__(self):
-        for _, conn in self.conn:
-            if conn and conn.open:
-                conn.close()
 
-
-def execute_raw_sql(db_label, sql, params=None):
-    return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
+async def execute_raw_sql(db_label, sql, params=None):
+    return await Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
