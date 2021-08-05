@@ -13,13 +13,21 @@ db_config = {
 Database.connect(**db_config)
 
 
-# define model
-class TestModel(Model):
-    __db_table__ = 'test'
-    __db_label__ = 'default'
-    id = Field(primary_key=True) # primary_key is optional
+class TestModelBasic(Model):
+    id = Field(primary_key=True)
     a = Field()
+
+    class Meta:
+        abstract = True
+
+
+class TestModel(TestModelBasic):
     b = Field()
+
+    class Meta:
+        db_table = 'test'
+        db_label = 'default'
+
 
 # create instance
 test = TestModel()

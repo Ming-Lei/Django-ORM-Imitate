@@ -1,7 +1,7 @@
 Django ORM Imitate
 ========
 
-基于[QuickORM](https://github.com/2shou/QuickORM)开发 模仿实现Django ORM的基本操作  
+基于 [QuickORM](https://github.com/2shou/QuickORM) 开发 模仿实现Django ORM的基本操作
 
 ----------------
 
@@ -26,12 +26,32 @@ Define a model
 ```python
 from data_handler import Model, Field
 
+
 class TestModel(Model):
-    __db_table__ = 'test'
-    __db_label__ = 'default'
-    id = Field(primary_key=True) # primary_key is optional
+    id = Field(primary_key=True)  # primary_key is optional
     a = Field()
     b = Field()
+
+    class Meta:
+        db_table = 'test'  # If not filled, the db_table is class name 
+        db_label = 'default'  # If not filled, the db_label is default  
+
+
+# use abstract class
+# class TestModelBasic(Model):
+#     id = Field(primary_key=True)
+#     a = Field()
+# 
+#     class Meta:
+#         abstract = True
+# 
+# 
+# class TestModel(TestModelBasic):
+#     b = Field()
+# 
+#     class Meta:
+#         db_table = 'test'
+#         db_label = 'default'
 ```
 
 Insert
@@ -104,5 +124,5 @@ from data_handler import execute_raw_sql
 
 results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
 for val, cnt in results:
-  print(val, cnt)
+    print(val, cnt)
 ```

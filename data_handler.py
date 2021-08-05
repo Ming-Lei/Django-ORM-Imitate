@@ -1,6 +1,5 @@
 # coding: utf-8
-import MySQLdb
-# py2 mysql-python  py3 mysqlclient
+import pymysql
 
 
 class Field:
@@ -26,9 +25,6 @@ class Combinable:
     def __truediv__(self, other):
         return self._combine(self, ' / ', other)
 
-    def __div__(self, other):
-        return self._combine(self, ' / ', other)
-
     def __mod__(self, other):
         return self._combine(self, ' %% ', other)
 
@@ -45,9 +41,6 @@ class Combinable:
         return self._combine(other, ' * ', self)
 
     def __rtruediv__(self, other):
-        return self._combine(other, ' / ', self)
-
-    def __rdiv__(self, other):
         return self._combine(other, ' / ', self)
 
     def __rmod__(self, other):
@@ -116,9 +109,6 @@ class Q:
 
     def __len__(self):
         return len(self.children)
-
-    def __nonzero__(self):
-        return bool(self.children)
 
     def __bool__(self):
         return bool(self.children)
@@ -282,9 +272,6 @@ class WhereNode:
         return clone
 
     def __bool__(self):
-        return bool(self.filter_Q or self.exclude_Q)
-
-    def __nonzero__(self):
         return bool(self.filter_Q or self.exclude_Q)
 
 
@@ -580,9 +567,6 @@ class QuerySet(object):
             inst = self.model(**dict(zip(self.fields_list, value)))
             yield inst
 
-    def __nonzero__(self):
-        return self.exists()
-
     def __bool__(self):
         return self.exists()
 
@@ -725,13 +709,19 @@ class MetaModel(type):
         if name == 'Model':
             return
 
-        __db_table__ = attrs.get('__db_table__')
-        if not __db_table__:
-            raise TypeError('__db_table__ is not defined in %s ' % name)
+        meta_attrs = attrs.get('Meta')
+        if meta_attrs and getattr(meta_attrs, 'abstract', False):
+            return
+        cls.__db_table__ = getattr(meta_attrs, 'db_table', name)
+        cls.__db_label__ = getattr(meta_attrs, 'db_label', 'default')
 
         field_list = []
         primary_key = None
-        for key, val in cls.__dict__.items():
+        attr_dict = {}
+        mro_list = cls.mro()[:-2]
+        for base in mro_list[::-1]:
+            attr_dict.update(base.__dict__)
+        for key, val in attr_dict.items():
             if isinstance(val, Field):
                 if val.primary_key:
                     if primary_key:
@@ -745,28 +735,14 @@ class MetaModel(type):
         cls.__primary_key__ = primary_key
 
 
-def with_metaclass(meta, *bases):
-    # 兼容2和3的元类  见 py2 future.utils.with_metaclass
-    class metaclass(meta):
-        __call__ = type.__call__
-        __init__ = type.__init__
-
-        def __new__(cls, name, this_bases, d):
-            if this_bases is None:
-                return type.__new__(cls, name, (), d)
-            return meta(name, bases, d)
-
-    return metaclass('temporary_class', None, {})
-
-
-class Model(with_metaclass(MetaModel, dict)):
+class Model(metaclass=MetaModel):
 
     def __init__(self, **kw):
         for k, v in kw.items():
             if k in self.field_list:
                 setattr(self, k, v)
             elif k == 'pk' and self.__primary_key__:
-                self._set_pk_val(v)
+                self.pk = v
             else:
                 raise TypeError("'%s' is an invalid keyword argument for this function" % k)
 
@@ -780,15 +756,12 @@ class Model(with_metaclass(MetaModel, dict)):
         primary_key = self.__primary_key__
         if not primary_key:
             raise TypeError('Primary key not defined in class: %s' % self.__class__.__name__)
-        return setattr(self, primary_key, value)
+        setattr(self, primary_key, value)
 
     pk = property(_get_pk_val, _set_pk_val)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
-
-    def __nonzero__(self):
-        return bool(self.__dict__)
 
     def __bool__(self):
         return bool(self.__dict__)
@@ -803,7 +776,7 @@ class Model(with_metaclass(MetaModel, dict)):
     def _insert(self):
         insert = 'insert into %s(%s) values (%s);' % (
             self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
-        cursor = Database.execute(self.__db_label__, insert, self.__dict__.values())
+        cursor = Database.execute(self.__db_label__, insert, tuple(self.__dict__.values()))
         if self.__primary_key__:
             last_rowid = cursor.lastrowid
             self._set_pk_val(last_rowid)
@@ -824,20 +797,19 @@ class Model(with_metaclass(MetaModel, dict)):
 
 # 数据库调用
 class Database:
-    autocommit = True
     conn = {}
     db_config = {}
 
     @classmethod
     def connect(cls, **databases):
         for db_label, db_config in databases.items():
-            cls.conn[db_label] = MySQLdb.connect(host=db_config.get('host', 'localhost'),
+            cls.conn[db_label] = pymysql.connect(host=db_config.get('host', 'localhost'),
                                                  port=int(db_config.get('port', 3306)),
                                                  user=db_config.get('user', 'root'),
                                                  passwd=db_config.get('password', ''),
                                                  db=db_config.get('database', 'test'),
-                                                 charset=db_config.get('charset', 'utf8'))
-            cls.conn[db_label].autocommit(cls.autocommit)
+                                                 charset=db_config.get('charset', 'utf8'),
+                                                 autocommit=True)
         cls.db_config.update(databases)
 
     @classmethod
@@ -846,7 +818,7 @@ class Database:
             cls.connect(**cls.db_config)
         try:
             cls.conn[db_label].ping()
-        except MySQLdb.OperationalError:
+        except pymysql.OperationalError:
             cls.connect(**cls.db_config)
         return cls.conn[db_label]
 
