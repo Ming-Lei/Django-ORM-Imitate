@@ -696,11 +696,10 @@ class Manager:
     def bulk_create(self, objs):
         fields = self.model.field_list
         f = lambda obj, field: getattr(obj, field, None)
-        items = [f(obj, field) for obj in objs for field in fields]
-        obj_value = '(%s)' % ', '.join(['%s'] * len(fields))
-        insert = 'insert into %s(%s) values %s;' % (
-            self.model.__db_table__, ', '.join(fields), ', '.join([obj_value] * len(objs)))
-        Database.execute(self.model.__db_label__, insert, items)
+        items = [[f(obj, field) for field in fields] for obj in objs]
+        obj_value = ', '.join(['%s'] * len(fields))
+        insert = 'insert into %s(%s) values(%s);' % (self.model.__db_table__, ', '.join(fields), obj_value)
+        Database.executemany(self.model.__db_label__, insert, items)
 
 
 class MetaModel(type):
@@ -827,6 +826,13 @@ class Database:
         db_conn = cls.get_conn(db_label)
         cursor = db_conn.cursor()
         cursor.execute(*args)
+        return cursor
+
+    @classmethod
+    def executemany(cls, db_label, *args):
+        db_conn = cls.get_conn(db_label)
+        cursor = db_conn.cursor()
+        cursor.executemany(*args)
         return cursor
 
     def __del__(self):
