@@ -284,6 +284,7 @@ class Query:
         self.where = WhereNode(model)
         self.limit_dict = {}
         self.order_fields = []
+        self.group_by = None
         self.distinct = False
         self.select = self.fields_list
 
@@ -293,6 +294,15 @@ class Query:
 
     # 根据当前筛选条件构建sql、params
     def sql_expr(self, method='select', update_dict=None):
+
+        if update_dict and self.limit_dict:
+            # 不支持切片更新
+            raise TypeError('Cannot update a query once a slice has been taken.')
+
+        if self.group_by and method in ['delete', 'update']:
+            # group_by 不支持 update、delete
+            raise TypeError('Cannot execute with group by query.')
+
         params = []
         where_expr = ''
 
@@ -313,9 +323,8 @@ class Query:
                     order_list.append(field)
             where_expr += ' , '.join(order_list)
 
-        if update_dict and self.limit_dict:
-            # 不支持切片更新
-            raise TypeError('Cannot update a query once a slice has been taken.')
+        if self.group_by:
+            where_expr += ' group by ' + ', '.join(self.group_by)
 
         # limit offset
         limit = self.limit_dict.get('limit')
@@ -451,6 +460,17 @@ class QuerySet(object):
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
         return self._clone(ValuesListQuerySet, fields_list, flat)
+
+    # group_by
+    def group_by(self, *args):
+        fields_list = ModelCheck(self.model).field_check(args)
+        clone = self._clone()
+        clone.query.group_by = fields_list
+        return clone
+
+    # todo annotate
+    def annotate(self, *args):
+        pass
 
     # distinct
     def distinct(self, *field_names):
