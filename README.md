@@ -36,7 +36,6 @@ class TestModel(Model):
         db_table = 'test'  # If not filled, the db_table is class name 
         db_label = 'default'  # If not filled, the db_label is default  
 
-
 # use abstract class
 # class TestModelBasic(Model):
 #     id = Field(primary_key=True)
@@ -70,6 +69,23 @@ print(test.pk)
 
 test = TestModel.objects.create(a='marry', b=3)
 
+# bulk create
+temp_list = [
+    ['Beth', 4],
+    ['Summer', 5],
+    ['Rick', 6],
+    ['Morty', 7],
+    ['Jerry', 8],
+    ['Beth', 9],
+    ['Summer', 10],
+]
+
+objs_list = []
+for (temp_a, temp_b) in temp_list:
+    obj = TestModel(a=temp_a, b=temp_b)
+    objs_list.append(obj)
+
+TestModel.objects.bulk_create(objs_list)
 ```
 
 Query
@@ -78,10 +94,9 @@ Query
 ```python
 from data_handler import Q
 
-filter_result = TestModel.objects.filter(Q(a='john') | Q(a='marry'), pk__gt=1).exclude(b__in=[3, 4])
+filter_result = TestModel.objects.filter(Q(a='Rick') | Q(a='Morty'), pk__gt=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 
-# select
 for r in filter_result[:5]:
     print(type(r))
     print(r.a)
@@ -111,9 +126,23 @@ Update
 ------
 
 ```python
-first.a = 'update'
+from data_handler import F
+
+first.a = 'Rick Sanchez'
 first.save()
-filter_result.update(b=1)
+filter_result.update(b=F('b') + 11)
+```
+
+Group by
+------
+
+```python
+from data_handler import Sum, Max
+
+group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id'))
+print(group_value.query)
+for obj in group_value:
+    print(obj.a, obj.sum_b, obj.max_id)
 ```
 
 Execute raw SQL

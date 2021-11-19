@@ -1,5 +1,37 @@
 # coding: utf-8
+from collections import namedtuple
+
 import pymysql
+
+
+class Aggregate:
+    func = '%s'
+
+    def __init__(self, field):
+        self.field = field
+
+    def sql_expr(self):
+        return self.func % self.field
+
+
+class Avg(Aggregate):
+    func = 'avg(%s)'
+
+
+class Count(Aggregate):
+    func = 'count(%s)'
+
+
+class Max(Aggregate):
+    func = 'max(%s)'
+
+
+class Min(Aggregate):
+    func = 'min(%s)'
+
+
+class Sum(Aggregate):
+    func = 'sum(%s)'
 
 
 class Field:
@@ -283,6 +315,7 @@ class Query:
         self.flat = False
         self.where = WhereNode(model)
         self.limit_dict = {}
+        self.annotates = {}
         self.order_fields = []
         self.group_by = None
         self.distinct = False
@@ -358,7 +391,11 @@ class Query:
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            select_field = ', '.join(self.select)
+            select_field_list = list(self.select[:])
+            # 聚合查询
+            for k, v in self.annotates.items():
+                select_field_list.append('%s as %s' % (v.sql_expr(), k))
+            select_field = ', '.join(select_field_list)
             table = self.model.__db_table__
             subquery = 'select %s %s from %s %s' % (
                 'distinct' if self.distinct else '', select_field, table, where_expr)
@@ -373,12 +410,14 @@ class Query:
     # clone
     def clone(self):
         obj = Query(self.model)
-        obj.where = self.where.clone()
         obj.flat = self.flat
-        obj.order_fields = self.order_fields[:]
+        obj.where = self.where.clone()
+        obj.annotates.update(self.annotates)
         obj.limit_dict.update(self.limit_dict)
-        obj.select = self.select[:]
+        obj.order_fields = self.order_fields[:]
+        obj.group_by = self.group_by
         obj.distinct = self.distinct
+        obj.select = self.select[:]
         return obj
 
 
@@ -468,9 +507,11 @@ class QuerySet(object):
         clone.query.group_by = fields_list
         return clone
 
-    # todo annotate
-    def annotate(self, *args):
-        pass
+    # annotate
+    def annotate(self, **kwargs):
+        clone = self._clone(RawQuerySet)
+        clone.query.annotates = kwargs
+        return clone
 
     # distinct
     def distinct(self, *field_names):
@@ -635,6 +676,26 @@ class ValuesListQuerySet(QuerySet):
 
     def __repr__(self):
         return '<ValuesListQuerySet Obj>'
+
+
+class RawQuerySet(QuerySet):
+
+    # raw 查询
+    def select(self):
+        if self.select_result is None:
+            sql, params = self.query.sql_expr()
+            cursor = Database.execute(self.model.__db_label__, sql, params)
+            self.raw_obj = namedtuple(self.model.__name__, [col[0] for col in cursor.description])
+            self.select_result = cursor.fetchall()
+
+    def __iter__(self):
+        self.select()
+        for value in self.select_result:
+            inst = self.raw_obj(*value)
+            yield inst
+
+    def __repr__(self):
+        return '<RawQuerySet Obj>'
 
 
 class ModelCheck:
