@@ -58,16 +58,16 @@ Insert
 
 ```python
 test = TestModel()
-test.a = 'john'
+test.a = 'Rick'
 test.b = 1
 test.save()
 print(test.id)
 
-test = TestModel(a='marry', b=2)
+test = TestModel(a='Morty', b=2)
 test.save()
 print(test.pk)
 
-test = TestModel.objects.create(a='marry', b=3)
+test = TestModel.objects.create(a='Jerry', b=3)
 
 # bulk create
 temp_list = [
@@ -142,7 +142,7 @@ from data_handler import Sum, Max
 group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id'))
 print(group_value.query)
 for obj in group_value:
-    print(obj.a, obj.sum_b, obj.max_id)
+    print(obj['a'], obj['sum_b'], obj['max_id'])
 ```
 
 Execute raw SQL

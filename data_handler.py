@@ -1,5 +1,4 @@
 # coding: utf-8
-from collections import namedtuple
 
 import pymysql
 
@@ -20,6 +19,11 @@ class Avg(Aggregate):
 
 class Count(Aggregate):
     func = 'count(%s)'
+
+    def __init__(self, field, distinct=False):
+        super(Count, self).__init__(field=field)
+        if distinct:
+            self.func = 'count(distinct %s)'
 
 
 class Max(Aggregate):
@@ -153,7 +157,6 @@ class Q:
 class WhereNode:
     def __init__(self, model):
         self.model = model
-        self.fields_list = self.model.field_list
         self.filter_Q = Q()
         self.exclude_Q = Q()
 
@@ -313,12 +316,12 @@ class Query:
         self.fields_list = self.model.field_list
 
         self.flat = False
-        self.where = WhereNode(model)
-        self.limit_dict = {}
         self.annotates = {}
-        self.order_fields = []
+        self.limit_dict = {}
         self.group_by = None
         self.distinct = False
+        self.order_fields = []
+        self.where = WhereNode(model)
         self.select = self.fields_list
 
     def __str__(self):
@@ -391,11 +394,11 @@ class Query:
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            select_field_list = list(self.select[:])
+            field_list = self.select
             # 聚合查询
             for k, v in self.annotates.items():
-                select_field_list.append('%s as %s' % (v.sql_expr(), k))
-            select_field = ', '.join(select_field_list)
+                field_list.append('%s as %s' % (v.sql_expr(), k))
+            select_field = ', '.join(field_list)
             table = self.model.__db_table__
             subquery = 'select %s %s from %s %s' % (
                 'distinct' if self.distinct else '', select_field, table, where_expr)
@@ -411,13 +414,13 @@ class Query:
     def clone(self):
         obj = Query(self.model)
         obj.flat = self.flat
+        obj.select = self.select[:]
+        obj.group_by = self.group_by
+        obj.distinct = self.distinct
         obj.where = self.where.clone()
         obj.annotates.update(self.annotates)
         obj.limit_dict.update(self.limit_dict)
         obj.order_fields = self.order_fields[:]
-        obj.group_by = self.group_by
-        obj.distinct = self.distinct
-        obj.select = self.select[:]
         return obj
 
 
@@ -509,9 +512,8 @@ class QuerySet(object):
 
     # annotate
     def annotate(self, **kwargs):
-        clone = self._clone(RawQuerySet)
-        clone.query.annotates = kwargs
-        return clone
+        self.query.annotates = kwargs
+        return self.values()
 
     # distinct
     def distinct(self, *field_names):
@@ -636,16 +638,19 @@ class QuerySet(object):
 
 
 class ValuesQuerySet(QuerySet):
+    def __init__(self, *args, **kwargs):
+        super(ValuesQuerySet, self).__init__(*args, **kwargs)
+        self.select_field = self.query.select + list(self.query.annotates.keys())
 
     def __iter__(self):
         self.select()
         for value in self.select_result:
-            inst = {field: value[index] for index, field in enumerate(self.query.select)}
+            inst = {field: value[index] for index, field in enumerate(self.select_field)}
             yield inst
 
     def get_index(self, index):
         index_value = self.base_index(index)
-        return {field: index_value[f_index] for f_index, field in enumerate(self.query.select)}
+        return {field: index_value[f_index] for f_index, field in enumerate(self.select_field)}
 
     def __repr__(self):
         return '<ValuesQuerySet Obj>'
@@ -655,7 +660,7 @@ class ValuesListQuerySet(QuerySet):
     def __init__(self, *args, **kwargs):
         super(ValuesListQuerySet, self).__init__(*args, **kwargs)
         self.flat = self.query.flat
-        self.select_field = self.query.select
+        self.select_field = self.query.select + list(self.query.annotates.keys())
         if self.flat and len(self.select_field) != 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
@@ -676,26 +681,6 @@ class ValuesListQuerySet(QuerySet):
 
     def __repr__(self):
         return '<ValuesListQuerySet Obj>'
-
-
-class RawQuerySet(QuerySet):
-
-    # raw 查询
-    def select(self):
-        if self.select_result is None:
-            sql, params = self.query.sql_expr()
-            cursor = Database.execute(self.model.__db_label__, sql, params)
-            self.raw_obj = namedtuple(self.model.__name__, [col[0] for col in cursor.description])
-            self.select_result = cursor.fetchall()
-
-    def __iter__(self):
-        self.select()
-        for value in self.select_result:
-            inst = self.raw_obj(*value)
-            yield inst
-
-    def __repr__(self):
-        return '<RawQuerySet Obj>'
 
 
 class ModelCheck:
@@ -774,12 +759,12 @@ class Manager:
     def values_list(self, *args):
         return self.get_queryset().values_list(*args)
 
-    def bulk_create(self, objs):
+    def bulk_create(self, objs, ignore_conflicts=False):
         fields = self.model.field_list
-        f = lambda obj, field: getattr(obj, field, None)
-        items = [[f(obj, field) for field in fields] for obj in objs]
+        items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
-        insert = 'insert into %s(%s) values(%s);' % (self.model.__db_table__, ', '.join(fields), obj_value)
+        insert = 'insert %s into %s(%s) values(%s);' % (
+            'ignore' if ignore_conflicts else '', self.model.__db_table__, ', '.join(fields), obj_value)
         Database.executemany(self.model.__db_label__, insert, items)
 
 

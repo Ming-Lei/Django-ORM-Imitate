@@ -89,7 +89,7 @@ filter_result.update(b=F('b') + 11)
 group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id'))
 print(group_value.query)
 for obj in group_value:
-    print(obj.a, obj.sum_b, obj.max_id)
+    print(obj['a'], obj['sum_b'], obj['max_id'])
 
 # execute raw sql
 results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
