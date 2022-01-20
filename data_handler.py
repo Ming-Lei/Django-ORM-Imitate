@@ -316,9 +316,9 @@ class Query:
         self.fields_list = self.model.field_list
 
         self.flat = False
+        self.group_by = []
         self.annotates = {}
         self.limit_dict = {}
-        self.group_by = None
         self.distinct = False
         self.order_fields = []
         self.where = WhereNode(model)
@@ -415,9 +415,9 @@ class Query:
         obj = Query(self.model)
         obj.flat = self.flat
         obj.select = self.select[:]
-        obj.group_by = self.group_by
         obj.distinct = self.distinct
         obj.where = self.where.clone()
+        obj.group_by = self.group_by[:]
         obj.annotates.update(self.annotates)
         obj.limit_dict.update(self.limit_dict)
         obj.order_fields = self.order_fields[:]
@@ -507,13 +507,14 @@ class QuerySet(object):
     def group_by(self, *args):
         fields_list = ModelCheck(self.model).field_check(args)
         clone = self._clone()
-        clone.query.group_by = fields_list
+        clone.query.group_by += fields_list
         return clone
 
     # annotate
     def annotate(self, **kwargs):
-        self.query.annotates = kwargs
-        return self.values()
+        _ = ModelCheck(self.model).field_check([x.field for x in kwargs.values()])
+        self.query.annotates.update(kwargs)
+        return self._clone(ValuesQuerySet)
 
     # distinct
     def distinct(self, *field_names):
