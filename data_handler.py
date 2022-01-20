@@ -394,7 +394,7 @@ class Query:
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            field_list = self.select
+            field_list = self.select[:]
             # 聚合查询
             for k, v in self.annotates.items():
                 field_list.append('%s as %s' % (v.sql_expr(), k))
@@ -553,7 +553,7 @@ class QuerySet(object):
             klass = self.__class__
         query = self.query.clone()
         if select:
-            query.select = select[:]
+            query.select = list(select[:])
         if flat:
             query.flat = flat
         obj = klass(model=self.model, query=query)
@@ -661,9 +661,10 @@ class ValuesListQuerySet(QuerySet):
     def __init__(self, *args, **kwargs):
         super(ValuesListQuerySet, self).__init__(*args, **kwargs)
         self.flat = self.query.flat
-        self.select_field = self.query.select + list(self.query.annotates.keys())
+        self.select_field = self.query.select[:]
         if self.flat and len(self.select_field) != 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
+        self.select_field += list(self.query.annotates.keys())
 
     def __iter__(self):
         self.select()
