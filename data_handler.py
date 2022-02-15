@@ -331,8 +331,10 @@ class Query:
     # 根据当前筛选条件构建sql、params
     def sql_expr(self, method='select', update_dict=None):
 
-        if update_dict and self.limit_dict:
-            # 不支持切片更新
+        limit = self.limit_dict.get('limit')
+        offset = self.limit_dict.get('offset')
+        if update_dict and offset:
+            # update 不支持 offset
             raise TypeError('Cannot update a query once a slice has been taken.')
 
         if self.group_by and method in ['delete', 'update']:
@@ -363,8 +365,6 @@ class Query:
             where_expr += ' group by ' + ', '.join(self.group_by)
 
         # limit offset
-        limit = self.limit_dict.get('limit')
-        offset = self.limit_dict.get('offset')
         if limit is None and offset is not None:
             limit = 18446744073709551615
         if limit is not None:
