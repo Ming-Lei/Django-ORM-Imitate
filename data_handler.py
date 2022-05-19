@@ -229,16 +229,10 @@ class WhereNode:
             'gte': ' >= %s ',
             'lt': ' < %s ',
             'lte': ' <= %s ',
-            'contains': ' like %%%s%% ',
-            'startswith': ' like %s%% ',
-            'endswith': ' like %%%s ',
+            'contains': ' like CONCAT("%%", %s, "%%") ',
+            'startswith': ' like CONCAT(%s, "%%") ',
+            'endswith': ' like CONCAT("%%", %s) ',
         }
-        F_correspond_dict = {
-            'contains': ' like CONCAT("%%%%", %s, "%%%%") ',
-            'startswith': ' like CONCAT(%s, "%%%%") ',
-            'endswith': ' like CONCAT("%%%%", %s) ',
-        }
-
         raw_sql = ''
         params = []
         query_str, value = child_query
@@ -252,12 +246,8 @@ class WhereNode:
             raw_sql = ' ' + field + temp_sql
             params = [value]
             if isinstance(value, (F, CombinedExpression)):
-                temp_raw_sql, value = self.f_expr(value)
-                if magic in F_correspond_dict:
-                    temp_sql = F_correspond_dict.get(magic)
-                    raw_sql = ' ' + field + temp_sql
-                raw_sql = raw_sql % temp_raw_sql
-                params = value
+                temp_raw_sql, params = self.f_expr(value)
+                raw_sql = raw_sql.replace('%s', temp_raw_sql)
         elif magic == 'isnull':
             if value:
                 raw_sql = ' ' + field + ' is null '
