@@ -241,6 +241,7 @@ class WhereNode:
         else:
             field = query_str
             magic = ''
+        field = '`%s`' % field
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
@@ -346,13 +347,13 @@ class Query:
             for field in self.order_fields:
                 if field[0] == '-':
                     field_name = field[1:]
-                    order_list.append(field_name + ' desc ')
+                    order_list.append('`' + field_name + '` desc ')
                 else:
-                    order_list.append(field)
+                    order_list.append('`' + field + '`')
             where_expr += ' , '.join(order_list)
 
         if self.group_by:
-            where_expr += ' group by ' + ', '.join(self.group_by)
+            where_expr += ' group by ' + ', '.join('`%s`' % x for x in self.group_by)
 
         # limit offset
         if limit is None and offset is not None:
@@ -377,14 +378,14 @@ class Query:
                     f_sql, f_params = self.where.f_expr(val)
                     temp_key = ' = ' + f_sql
                     temp_params = f_params
-                _keys.append(key + temp_key)
+                _keys.append('`' + key + '`' + temp_key)
                 _params.extend(temp_params)
             params = _params + params
             sql = 'update %s set %s %s;' % (self.model.__db_table__, ', '.join(_keys), where_expr)
         elif method == 'delete':
             sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
         else:
-            field_list = self.select[:]
+            field_list = ['`%s`' % x for x in self.select]
             # 聚合查询
             for k, v in self.annotates.items():
                 field_list.append('%s as %s' % (v.sql_expr(), k))
@@ -748,15 +749,15 @@ class Manager:
     def values(self, *args):
         return self.get_queryset().values(*args)
 
-    def values_list(self, *args):
-        return self.get_queryset().values_list(*args)
+    def values_list(self, *args, **kwargs):
+        return self.get_queryset().values_list(*args, **kwargs)
 
     def bulk_create(self, objs, ignore_conflicts=False):
         fields = self.model.field_list
         items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
         insert = 'insert %s into %s(%s) values(%s);' % (
-            'ignore' if ignore_conflicts else '', self.model.__db_table__, ', '.join(fields), obj_value)
+            'ignore' if ignore_conflicts else '', self.model.__db_table__, ', '.join('`%s`' % x for x in fields), obj_value)
         Database.executemany(self.model.__db_label__, insert, items)
 
 
@@ -832,7 +833,7 @@ class Model(metaclass=MetaModel):
 
     def _insert(self):
         insert = 'insert into %s(%s) values (%s);' % (
-            self.__db_table__, ', '.join(self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
+            self.__db_table__, ', '.join('`%s`' % x for x in self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
         cursor = Database.execute(self.__db_label__, insert, tuple(self.__dict__.values()))
         if self.__primary_key__:
             last_rowid = cursor.lastrowid
