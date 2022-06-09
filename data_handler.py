@@ -258,23 +258,25 @@ class WhereNode:
             raw_sql = ' ' + field + ' between %s and %s '
             params = value
         elif magic == 'in':
-            if isinstance(value, (ValuesListQuerySet, ValuesQuerySet)):
+            self_host = self.model.db_info('host')
+            if isinstance(value, (ValuesListQuerySet, ValuesQuerySet, QuerySet)):
                 subquery = value.query.clone()
-                if len(subquery.select) != 1:
-                    raise TypeError('Cannot use a multi-field %s as a filter value.'
-                                    % value.__class__.__name__)
-                sub_sql, sub_params = subquery.sql_expr()
+                # 禁止跨库in查询
+                sub_host = subquery.model.db_info('host')
+                if self_host != sub_host:
+                    raise TypeError(
+                        '%s and %s are not in the same database ' % (self.model.__name__, value.model.__name__))
+                # QuerySet 使用主键
+                if isinstance(value, QuerySet):
+                    primary_key = value.model.__primary_key__
+                    if not primary_key:
+                        raise TypeError('Primary key not defined in class: %s' % value.model.__name__)
+                    subquery.select = [primary_key]
+                # in查询只允许单字段
+                elif len(subquery.select) != 1:
+                    raise TypeError('Cannot use a multi-field %s as a filter value.' % value.model.__name__)
+                sub_sql, params = subquery.sql_expr()
                 raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
-                params = sub_params
-            elif isinstance(value, QuerySet):
-                primary_key = value.model.__primary_key__
-                if not primary_key:
-                    raise TypeError('Primary key not defined in class: %s' % value.model.__class__.__name__)
-                subquery = value.query.clone()
-                subquery.select = [primary_key]
-                sub_sql, sub_params = subquery.sql_expr()
-                raw_sql = ' ' + field + ' in ( ' + sub_sql[:-1] + ' ) '
-                params = sub_params
             else:
                 if len(value) == 0:
                     raw_sql = ' False '
@@ -365,6 +367,7 @@ class Query:
             where_expr += ' offset %s '
             params.append(offset)
 
+        table_info = self.model.table_info()
         # 构建不同操作的sql语句
         if method == 'update' and update_dict:
             _keys = []
@@ -381,22 +384,21 @@ class Query:
                 _keys.append('`' + key + '`' + temp_key)
                 _params.extend(temp_params)
             params = _params + params
-            sql = 'update %s set %s %s;' % (self.model.__db_table__, ', '.join(_keys), where_expr)
+            sql = 'update %s set %s %s;' % (table_info, ', '.join(_keys), where_expr)
         elif method == 'delete':
-            sql = 'delete from %s %s;' % (self.model.__db_table__, where_expr)
+            sql = 'delete from %s %s;' % (table_info, where_expr)
         else:
             field_list = ['`%s`' % x for x in self.select]
             # 聚合查询
             for k, v in self.annotates.items():
                 field_list.append('%s as %s' % (v.sql_expr(), k))
             select_field = ', '.join(field_list)
-            table = self.model.__db_table__
             subquery = 'select %s %s from %s %s' % (
-                'distinct' if self.distinct else '', select_field, table, where_expr)
+                'distinct' if self.distinct else '', select_field, table_info, where_expr)
             if method == 'count' and (self.distinct or limit):
                 sql = 'select count(*) from (%s) subquery;' % subquery
             elif method == 'count':
-                sql = 'select count(*) from %s %s;' % (table, where_expr)
+                sql = 'select count(*) from %s %s;' % (table_info, where_expr)
             else:
                 sql = subquery + ';'
         return sql, tuple(params)
@@ -687,7 +689,7 @@ class ModelCheck:
         primary_key = self.model.__primary_key__
         if 'pk' in err_fields:
             if not primary_key:
-                raise TypeError('Primary key not defined in class: %s' % self.model.__class__.__name__)
+                raise TypeError('Primary key not defined in class: %s' % self.model.__name__)
             err_fields = err_fields - {'pk'}
         if err_fields:
             raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
@@ -757,7 +759,7 @@ class Manager:
         items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
         insert = 'insert %s into %s(%s) values(%s);' % (
-            'ignore' if ignore_conflicts else '', self.model.__db_table__, ', '.join('`%s`' % x for x in fields), obj_value)
+            'ignore' if ignore_conflicts else '', self.model.table_info(), ', '.join('`%s`' % x for x in fields), obj_value)
         Database.executemany(self.model.__db_label__, insert, items)
 
 
@@ -833,7 +835,8 @@ class Model(metaclass=MetaModel):
 
     def _insert(self):
         insert = 'insert into %s(%s) values (%s);' % (
-            self.__db_table__, ', '.join('`%s`' % x for x in self.__dict__.keys()), ', '.join(['%s'] * len(self.__dict__)))
+            self.table_info(), ', '.join('`%s`' % x for x in self.__dict__.keys()),
+            ', '.join(['%s'] * len(self.__dict__)))
         cursor = Database.execute(self.__db_label__, insert, tuple(self.__dict__.values()))
         if self.__primary_key__:
             last_rowid = cursor.lastrowid
@@ -851,6 +854,16 @@ class Model(metaclass=MetaModel):
                 filtered.update(**temp_dict)
             else:
                 self._insert()
+
+    @classmethod
+    def table_info(cls):
+        self_info = cls.db_info('database')
+        return '`%s`.`%s`' % (self_info, cls.__db_table__) if self_info else '`%s`' % cls.__db_table__
+
+    @classmethod
+    def db_info(cls, key):
+        self_config = Database.db_config.get(cls.__db_label__, {})
+        return self_config.get(key)
 
 
 # 数据库调用
