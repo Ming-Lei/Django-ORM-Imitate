@@ -171,7 +171,7 @@ class WhereNode:
 
         if self.exclude_Q:
             temp_sql, temp_params = self.sql_expr(self.exclude_Q)
-            if params:
+            if where_expr:
                 where_expr += ' and '
             where_expr += ' not (' + temp_sql + ')'
             params.extend(temp_params)
