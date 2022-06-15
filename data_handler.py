@@ -158,7 +158,6 @@ class WhereNode:
     def __init__(self, model):
         self.model = model
         self.filter_Q = Q()
-        self.exclude_Q = Q()
 
     def as_sql(self):
         params = []
@@ -169,12 +168,6 @@ class WhereNode:
             where_expr += temp_sql
             params.extend(temp_params)
 
-        if self.exclude_Q:
-            temp_sql, temp_params = self.sql_expr(self.exclude_Q)
-            if where_expr:
-                where_expr += ' and '
-            where_expr += ' not (' + temp_sql + ')'
-            params.extend(temp_params)
         return where_expr, params
 
     # 构建sql查询语句
@@ -189,10 +182,10 @@ class WhereNode:
             else:
                 temp_sql, temp_params = self._sql_expr(child)
                 if temp_sql:
-                    raw_sql = child.connector.join(temp_sql)
                     if child.negated:
-                        raw_sql = ' not ( ' + raw_sql + ' ) '
-                    elif child.connector != q_query.connector:
+                        temp_sql = [ ' not ' + x for x in temp_sql]
+                    raw_sql = child.connector.join(temp_sql)
+                    if child.connector != q_query.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
                     params.extend(temp_params)
@@ -287,20 +280,16 @@ class WhereNode:
 
         return raw_sql, params
 
-    def _add_q(self, q_object, filter=True):
-        if filter:
-            self.filter_Q.add(q_object, 'AND')
-        else:
-            self.exclude_Q.add(q_object, 'AND')
+    def _add_q(self, q_object):
+        self.filter_Q.add(q_object, 'AND')
 
     def clone(self):
         clone = WhereNode(self.model)
         clone.filter_Q.add(self.filter_Q, 'AND')
-        clone.exclude_Q.add(self.exclude_Q, 'AND')
         return clone
 
     def __bool__(self):
-        return bool(self.filter_Q or self.exclude_Q)
+        return bool(self.filter_Q)
 
 
 class Query:
@@ -555,21 +544,20 @@ class QuerySet(object):
     # 根据传入的筛选条件，返回新的QuerySet对象
     def _filter_or_exclude(self, negate, *args, **kwargs):
         clone = self._clone()
-        new_q = self._add_q(Q(*args, **kwargs))
-        if negate:
-            clone.query.where._add_q(new_q, False)
-        else:
-            clone.query.where._add_q(new_q, True)
+        temp_q = Q(*args, **kwargs)
+        temp_q.negated = negate
+        new_q = self._make_q(temp_q)
+        clone.query.where._add_q(new_q)
         return clone
 
-    def _add_q(self, q_object):
+    def _make_q(self, q_object):
         connector = q_object.connector
         new_q = Q()
         new_q.connector = connector
         new_q.negated = q_object.negated
         for child in q_object.children:
             if isinstance(child, Q):
-                temp_q = self._add_q(child)
+                temp_q = self._make_q(child)
                 new_q.add(temp_q, connector)
             else:
                 new_child = self.build_filter(child)
