@@ -22,7 +22,7 @@ class TestModelBasic(Model):
 
 
 class TestModel(TestModelBasic):
-    b = Field()
+    b = Field(db_column='bb')
 
     class Meta:
         db_table = 'test'
@@ -92,6 +92,6 @@ for obj in group_value:
     print(obj['a'], obj['sum_b'], obj['max_id'])
 
 # execute raw sql
-results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
+results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))
 for val, cnt in results:
     print(val, cnt)

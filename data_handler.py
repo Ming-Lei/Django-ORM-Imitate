@@ -9,8 +9,8 @@ class Aggregate:
     def __init__(self, field):
         self.field = field
 
-    def sql_expr(self):
-        return self.func % self.field
+    def sql_expr(self, field_func):
+        return self.func % field_func(self.field)
 
 
 class Avg(Aggregate):
@@ -41,6 +41,8 @@ class Sum(Aggregate):
 class Field:
     def __init__(self, **kw):
         self.primary_key = kw.get('primary_key', False)
+        self.db_column = kw.get('db_column', None)
+        self.name = None
 
 
 class Combinable:
@@ -183,7 +185,7 @@ class WhereNode:
                 temp_sql, temp_params = self._sql_expr(child)
                 if temp_sql:
                     if child.negated:
-                        temp_sql = [ ' not ' + x for x in temp_sql]
+                        temp_sql = [' not ' + x for x in temp_sql]
                     raw_sql = child.connector.join(temp_sql)
                     if child.connector != q_query.connector:
                         raw_sql = ' ( ' + raw_sql + ' ) '
@@ -199,7 +201,7 @@ class WhereNode:
     def f_expr(self, value):
         if isinstance(value, F):
             fields_list = ModelCheck(self.model).field_check([value.name])
-            return fields_list[0], []
+            return self.model.field_info(fields_list[0]), []
         params = []
         raw_sql_list = []
         for temp_f in [value.lhs, value.rhs]:
@@ -234,7 +236,7 @@ class WhereNode:
         else:
             field = query_str
             magic = ''
-        field = '`%s`' % field
+        field = self.model.field_info(field)
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
@@ -325,6 +327,7 @@ class Query:
 
         params = []
         where_expr = ''
+        field_info = self.model.field_info
 
         if self.where:
             where_expr += ' where '
@@ -338,13 +341,13 @@ class Query:
             for field in self.order_fields:
                 if field[0] == '-':
                     field_name = field[1:]
-                    order_list.append('`' + field_name + '` desc ')
+                    order_list.append(field_info(field_name) + ' desc ')
                 else:
-                    order_list.append('`' + field + '`')
+                    order_list.append(field_info(field))
             where_expr += ' , '.join(order_list)
 
         if self.group_by:
-            where_expr += ' group by ' + ', '.join('`%s`' % x for x in self.group_by)
+            where_expr += ' group by ' + ', '.join(field_info(x) for x in self.group_by)
 
         # limit offset
         if limit is None and offset is not None:
@@ -370,17 +373,17 @@ class Query:
                     f_sql, f_params = self.where.f_expr(val)
                     temp_key = ' = ' + f_sql
                     temp_params = f_params
-                _keys.append('`' + key + '`' + temp_key)
+                _keys.append(field_info(key) + temp_key)
                 _params.extend(temp_params)
             params = _params + params
             sql = 'update %s set %s %s;' % (table_info, ', '.join(_keys), where_expr)
         elif method == 'delete':
             sql = 'delete from %s %s;' % (table_info, where_expr)
         else:
-            field_list = ['`%s`' % x for x in self.select]
+            field_list = [field_info(x) for x in self.select]
             # 聚合查询
             for k, v in self.annotates.items():
-                field_list.append('%s as %s' % (v.sql_expr(), k))
+                field_list.append('%s as %s' % (v.sql_expr(field_info), k))
             select_field = ', '.join(field_list)
             subquery = 'select %s %s from %s %s' % (
                 'distinct' if self.distinct else '', select_field, table_info, where_expr)
@@ -746,8 +749,8 @@ class Manager:
         fields = self.model.field_list
         items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
-        insert = 'insert %s into %s(%s) values(%s);' % (
-            'ignore' if ignore_conflicts else '', self.model.table_info(), ', '.join('`%s`' % x for x in fields), obj_value)
+        insert = 'insert %s into %s(%s) values(%s);' % ('ignore' if ignore_conflicts else '', self.model.table_info(),
+                                                        ', '.join(self.model.field_info(x) for x in fields), obj_value)
         Database.executemany(self.model.__db_label__, insert, items)
 
 
@@ -771,12 +774,13 @@ class MetaModel(type):
             attr_dict.update(base.__dict__)
         for key, val in attr_dict.items():
             if isinstance(val, Field):
+                val.name = key
                 if val.primary_key:
                     if primary_key:
                         raise TypeError('Cannot define more than 1 primary key in class: %s' % name)
                     primary_key = key
                 field_list.append(key)
-                setattr(cls, key, None)
+                setattr(cls, key, val)
         cls.field_list = field_list
         cls.attrs = attrs
         cls.objects = Manager(cls)
@@ -786,6 +790,7 @@ class MetaModel(type):
 class Model(metaclass=MetaModel):
 
     def __init__(self, **kw):
+        [setattr(self, k, None) for k in self.field_list]
         for k, v in kw.items():
             if k in self.field_list:
                 setattr(self, k, v)
@@ -818,12 +823,11 @@ class Model(metaclass=MetaModel):
         return self.__class__ == obj.__class__ and self.__dict__ == obj.__dict__
 
     def __hash__(self):
-        kv_list = sorted(self.__dict__.items(), key=lambda x: x[0])
-        return hash(','.join(['"%s":"%s"' % x for x in kv_list]) + str(self.__class__))
+        return str(self.__dict__.__hash__) + str(self.__class__)
 
     def _insert(self):
         insert = 'insert into %s(%s) values (%s);' % (
-            self.table_info(), ', '.join('`%s`' % x for x in self.__dict__.keys()),
+            self.table_info(), ', '.join(self.field_info(x) for x in self.__dict__.keys()),
             ', '.join(['%s'] * len(self.__dict__)))
         cursor = Database.execute(self.__db_label__, insert, tuple(self.__dict__.values()))
         if self.__primary_key__:
@@ -842,6 +846,14 @@ class Model(metaclass=MetaModel):
                 filtered.update(**temp_dict)
             else:
                 self._insert()
+
+    @classmethod
+    def field_info(cls, field):
+        model_field = getattr(cls, field, None)
+        if not model_field:
+            raise TypeError('Cannot resolve keyword %s into field.' % field)
+        db_column = model_field.db_column or model_field.name
+        return '`%s`.`%s`' % (cls.__db_table__, db_column)
 
     @classmethod
     def table_info(cls):

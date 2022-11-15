@@ -30,7 +30,7 @@ from data_handler import Model, Field
 class TestModel(Model):
     id = Field(primary_key=True)  # primary_key is optional
     a = Field()
-    b = Field()
+    b = Field(db_column='bb')
 
     class Meta:
         db_table = 'test'  # If not filled, the db_table is class name 
@@ -46,7 +46,7 @@ class TestModel(Model):
 # 
 # 
 # class TestModel(TestModelBasic):
-#     b = Field()
+#     b = Field(db_column='bb')
 # 
 #     class Meta:
 #         db_table = 'test'
@@ -151,7 +151,7 @@ Execute raw SQL
 ```python
 from data_handler import execute_raw_sql
 
-results = execute_raw_sql('default', 'select b, count(*) from test where b = %s group by b;', (1,))
+results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))
 for val, cnt in results:
     print(val, cnt)
 ```
