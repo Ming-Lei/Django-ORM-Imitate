@@ -509,7 +509,7 @@ class QuerySet(object):
             clone = self._clone()
         if field_names:
             field_names, _ = ModelCheck(self.model).pk_replace(*field_names)
-            clone.query.select = field_names
+            clone.query.select = list(field_names)
         clone.query.distinct = True
         return clone
 
