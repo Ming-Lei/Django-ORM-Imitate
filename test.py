@@ -1,4 +1,4 @@
-from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max
+from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max, ForeignKey
 
 # connect database
 db_config = {
@@ -26,6 +26,14 @@ class TestModel(TestModelBasic):
 
     class Meta:
         db_table = 'test'
+        db_label = 'default'
+
+
+class TestForeignModel(TestModelBasic):
+    c = ForeignKey(to=TestModel, to_field="pk")
+
+    class Meta:
+        db_table = 'test_foreign'
         db_label = 'default'
 
 
@@ -95,3 +103,30 @@ for obj in group_value:
 results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))
 for val, cnt in results:
     print(val, cnt)
+
+# foreign key
+
+# create
+obj = TestForeignModel(a='Rick', c=first)
+obj.save()
+print(obj.pk)
+
+obj = TestForeignModel(a='Rick', c=2)
+obj.save()
+print(obj.pk)
+
+# bulk create
+objs_list = []
+for temp_a in ['Morty', 'Jerry', 'Beth', 'Summer']:
+    for x in range(1, 3):
+        obj = TestForeignModel(a=temp_a, c=x)
+        objs_list.append(obj)
+
+TestForeignModel.objects.bulk_create(objs_list)
+
+# filter
+foreign_values = TestForeignModel.objects.filter(a='Rick', c__lte=5)
+for obj in foreign_values:
+    obj_c = obj.c
+    print(type(obj_c))
+    print(obj_c.pk, obj_c.a, obj_c.b)

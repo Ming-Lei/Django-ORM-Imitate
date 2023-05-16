@@ -1,5 +1,5 @@
 # coding: utf-8
-
+from functools import partial
 import pymysql
 
 
@@ -42,7 +42,14 @@ class Field:
     def __init__(self, **kw):
         self.primary_key = kw.get('primary_key', False)
         self.db_column = kw.get('db_column', None)
-        self.name = None
+        self.name = kw.get('name', None)
+
+
+class ForeignKey(Field):
+    def __init__(self, **kw):
+        super(ForeignKey, self).__init__(**kw)
+        self.to_model = kw.get('to')
+        self.to_field = kw.get('to_field', 'pk')
 
 
 class Combinable:
@@ -200,7 +207,7 @@ class WhereNode:
 
     def f_expr(self, value):
         if isinstance(value, F):
-            fields_list = ModelCheck(self.model).field_check([value.name])
+            fields_list, _ = ModelCheck(self.model).field_wash([value.name])
             return self.model.field_info(fields_list[0]), []
         params = []
         raw_sql_list = []
@@ -446,14 +453,14 @@ class QuerySet(object):
     # update
     def update(self, **kwargs):
         if kwargs:
-            _, kwargs = ModelCheck(self.model).pk_replace(**kwargs)
+            _, kwargs = ModelCheck(self.model).field_wash(fields_list=[], fields_dict=kwargs)
             sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
             Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         obj = self._clone()
-        args, _ = ModelCheck(self.model).pk_replace(*args)
+        args, _ = ModelCheck(self.model).field_wash(args)
         obj.query.order_fields = args
         return obj
 
@@ -474,13 +481,13 @@ class QuerySet(object):
 
     # values
     def values(self, *args):
-        fields_list = ModelCheck(self.model).field_check(args)
+        fields_list, _ = ModelCheck(self.model).field_wash(args)
         return self._clone(ValuesQuerySet, fields_list)
 
     # values_list
     def values_list(self, *args, **kwargs):
         # 字段检查
-        fields_list = ModelCheck(self.model).field_check(args)
+        fields_list, _ = ModelCheck(self.model).field_wash(args)
         flat = kwargs.pop('flat', False)
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
@@ -490,14 +497,14 @@ class QuerySet(object):
 
     # group_by
     def group_by(self, *args):
-        fields_list = ModelCheck(self.model).field_check(args)
+        fields_list, _ = ModelCheck(self.model).field_wash(args)
         clone = self._clone()
         clone.query.group_by += fields_list
         return clone
 
     # annotate
     def annotate(self, **kwargs):
-        _ = ModelCheck(self.model).field_check([x.field for x in kwargs.values()])
+        ModelCheck(self.model).field_wash([x.field for x in kwargs.values()])
         self.query.annotates.update(kwargs)
         return self._clone(ValuesQuerySet)
 
@@ -508,7 +515,7 @@ class QuerySet(object):
         else:
             clone = self._clone()
         if field_names:
-            field_names, _ = ModelCheck(self.model).pk_replace(*field_names)
+            field_names, _ = ModelCheck(self.model).field_wash(field_names)
             clone.query.select = list(field_names)
         clone.query.distinct = True
         return clone
@@ -563,16 +570,8 @@ class QuerySet(object):
                 temp_q = self._make_q(child)
                 new_q.add(temp_q, connector)
             else:
-                new_child = self.build_filter(child)
-                new_q.add(Q(new_child), connector)
+                new_q.add(Q(child), connector)
         return new_q
-
-    def build_filter(self, filter_expr):
-        arg, value = filter_expr
-        lookup_splitted = arg.split('__')
-        if lookup_splitted[0] == 'pk' and self.model.__primary_key__:
-            lookup_splitted[0] = self.model.__primary_key__
-        return '__'.join(lookup_splitted), value
 
     # 自定义切片及索引取值
     def __getitem__(self, index):
@@ -672,40 +671,26 @@ class ValuesListQuerySet(QuerySet):
 class ModelCheck:
     def __init__(self, model):
         self.model = model
-        self.fields_list = self.model.field_list
 
-    # 字段检查
-    def field_check(self, fields_list):
-        err_fields = set(fields_list) - set(self.fields_list)
-        primary_key = self.model.__primary_key__
-        if 'pk' in err_fields:
-            if not primary_key:
-                raise TypeError('Primary key not defined in class: %s' % self.model.__name__)
-            err_fields = err_fields - {'pk'}
-        if err_fields:
-            raise TypeError('Cannot resolve keyword %s into field.' % list(err_fields)[0])
+    def field_wash(self, fields_list, fields_dict=None):
+        temp_list = []
+        for field in fields_list:
+            minus = ''
+            if field[0] == '-':
+                minus, field = '-', field[1:]
+            field_obj = self.model.attrs.get(field, None)
+            if not field_obj:
+                raise TypeError('Cannot resolve keyword %s into field.' % field)
+            temp_list.append(minus + field_obj.name)
 
-        fields_list, _ = self.pk_replace(*fields_list)
-        # 没有传入指定字段，返回全部
-        if not fields_list:
-            fields_list = self.fields_list
-        return fields_list
-
-    def pk_replace(self, *args, **kwargs):
-        primary_key = self.model.__primary_key__
-        if not primary_key:
-            return args, kwargs
-
-        if 'pk' in args:
-            pk_index = args.index('pk')
-            args = args[:pk_index] + (primary_key,) + args[pk_index + 1:]
-        if '-pk' in args:
-            pk_index = args.index('-pk')
-            args = args[:pk_index] + ('-' + primary_key,) + args[pk_index + 1:]
-        if 'pk' in kwargs:
-            kwargs[primary_key] = kwargs['pk']
-            del kwargs['pk']
-        return args, kwargs
+        temp_dict = {}
+        if fields_dict:
+            for key, value in fields_dict.items():
+                field_obj = self.model.attrs.get(key, None)
+                if not field_obj:
+                    raise TypeError('Cannot resolve keyword %s into field.' % key)
+                temp_dict[field_obj.name] = value
+        return temp_list, temp_dict
 
 
 class Manager:
@@ -746,7 +731,8 @@ class Manager:
         return self.get_queryset().values_list(*args, **kwargs)
 
     def bulk_create(self, objs, ignore_conflicts=False):
-        fields = self.model.field_list
+        if_foreign = lambda x: isinstance(self.model.attrs[x], ForeignKey)
+        fields = [x + '_id' if if_foreign(x) else x for x in self.model.field_list]
         items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
         insert = 'insert %s into %s(%s) values(%s);' % ('ignore' if ignore_conflicts else '', self.model.table_info(),
@@ -773,14 +759,25 @@ class MetaModel(type):
         for base in mro_list[::-1]:
             attr_dict.update(base.__dict__)
         for key, val in attr_dict.items():
-            if isinstance(val, Field):
+            if isinstance(val, ForeignKey):
+                val.name = key
+                attrs[key] = val
+                attrs[key + '_id'] = Field(name=key)
+                setattr(cls, key + '_id', Field(name=key))
+                _get_foreign = partial(cls._get_foreign, field=key)
+                _set_foreign = partial(cls._set_foreign, field=key)
+                setattr(cls, key, property(_get_foreign, _set_foreign))
+                field_list.append(key)
+            elif isinstance(val, Field):
                 val.name = key
                 if val.primary_key:
                     if primary_key:
                         raise TypeError('Cannot define more than 1 primary key in class: %s' % name)
                     primary_key = key
-                field_list.append(key)
+                    attrs['pk'] = val
+                attrs[key] = val
                 setattr(cls, key, val)
+                field_list.append(key)
         cls.field_list = field_list
         cls.attrs = attrs
         cls.objects = Manager(cls)
@@ -812,6 +809,20 @@ class Model(metaclass=MetaModel):
         setattr(self, primary_key, value)
 
     pk = property(_get_pk_val, _set_pk_val)
+
+    def _get_foreign(self, field):
+        self_value = getattr(self, field + '_id', None)
+        if self_value:
+            foreign_key = self.attrs[field]
+            to_model = foreign_key.to_model
+            to_field = foreign_key.to_field
+            return to_model.objects.filter(**{to_field: self_value}).first()
+
+    def _set_foreign(self, val, field):
+        if isinstance(val, Model):
+            to_field = self.attrs[field].to_field
+            val = getattr(val, to_field, None)
+        setattr(self, field + '_id', val)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
@@ -849,7 +860,7 @@ class Model(metaclass=MetaModel):
 
     @classmethod
     def field_info(cls, field):
-        model_field = getattr(cls, field, None)
+        model_field = cls.attrs.get(field, None)
         if not model_field:
             raise TypeError('Cannot resolve keyword %s into field.' % field)
         db_column = model_field.db_column or model_field.name
@@ -914,4 +925,4 @@ class Database:
 
 
 def execute_raw_sql(db_label, sql, params=None):
-    return Database.execute(db_label, sql, params) if params else Database.execute(db_label, sql)
+    return Database.execute(db_label, sql, params)
