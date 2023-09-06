@@ -125,7 +125,8 @@ for temp_a in ['Morty', 'Jerry', 'Beth', 'Summer']:
 TestForeignModel.objects.bulk_create(objs_list)
 
 # filter
-foreign_values = TestForeignModel.objects.filter(a='Rick', c__lte=5)
+foreign_values = TestForeignModel.objects.filter(c__a='Rick', c__b__lte=5)[:2]
+print(foreign_values.query)
 for obj in foreign_values:
     obj_c = obj.c
     print(type(obj_c))

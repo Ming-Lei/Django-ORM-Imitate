@@ -173,24 +173,27 @@ class WhereNode:
         where_expr = ''
 
         if self.filter_Q:
-            temp_sql, temp_params = self.sql_expr(self.filter_Q)
-            where_expr += temp_sql
+            join_sql, temp_sql, temp_params = self.sql_expr(self.filter_Q)
+            where_expr += join_sql + ' where ' + temp_sql
             params.extend(temp_params)
 
         return where_expr, params
 
     # 构建sql查询语句
     def _sql_expr(self, q_query):
-        sql_list = []
         params = []
+        sql_list = []
+        join_set = set()
         for child in q_query.children:
             if not isinstance(child, Q):
-                temp_sql, temp_params = self.magic_query(child)
+                temp_set, temp_sql, temp_params = self.magic_query(child)
+                join_set.update(temp_set)
                 sql_list.append(temp_sql)
                 params.extend(temp_params)
             else:
-                temp_sql, temp_params = self._sql_expr(child)
+                temp_set, temp_sql, temp_params = self._sql_expr(child)
                 if temp_sql:
+                    join_set.update(temp_set)
                     if child.negated:
                         temp_sql = [' not ' + x for x in temp_sql]
                     raw_sql = child.connector.join(temp_sql)
@@ -198,12 +201,12 @@ class WhereNode:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
                     params.extend(temp_params)
-        return sql_list, params
+        return join_set, sql_list, params
 
     # 取得对应sql及参数
     def sql_expr(self, q_query):
-        sql_list, params = self._sql_expr(q_query)
-        return q_query.connector.join(sql_list), params
+        join_set, sql_list, params = self._sql_expr(q_query)
+        return ' '.join(join_set), q_query.connector.join(sql_list), params
 
     def f_expr(self, value):
         if isinstance(value, F):
@@ -237,13 +240,36 @@ class WhereNode:
         }
         raw_sql = ''
         params = []
+        join_set = set()
+        temp_model = self.model
         query_str, value = child_query
+        # 双下划线特殊查询
         if '__' in query_str:
-            field, magic = query_str.split('__')
+            foreign_field = None
+            magic_list = query_str.split('__')
+            # 判断是否为外键查询
+            if len(magic_list) == 2:
+                field, magic = magic_list
+                if magic not in correspond_dict and magic not in ['isnull', 'range', 'in']:
+                    foreign_field, field, magic = field, magic, ''
+            elif len(magic_list) == 3:
+                foreign_field, field, magic = magic_list
+            else:
+                raise TypeError('Unsupported magic query %s' % query_str)
+            # 外键查询处理
+            if foreign_field:
+                if foreign_field.endswith('_id'):
+                    foreign_field = foreign_field[:-3]
+                foreign_key = self.model.attrs[foreign_field]
+                temp_model = foreign_key.to_model
+                to_field = foreign_key.to_field
+                join_sql = 'inner join %s on %s = %s' % (temp_model.table_info(), temp_model.field_info(to_field),
+                                                          self.model.field_info(foreign_field))
+                join_set.add(join_sql)
         else:
             field = query_str
             magic = ''
-        field = self.model.field_info(field)
+        field = temp_model.field_info(field)
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
             raw_sql = ' ' + field + temp_sql
@@ -267,7 +293,7 @@ class WhereNode:
                 sub_host = subquery.model.db_info('host')
                 if self_host != sub_host:
                     raise TypeError(
-                        '%s and %s are not in the same database ' % (self.model.__name__, value.model.__name__))
+                        '%s and %s are not in the same database ' % (temp_model.__name__, value.model.__name__))
                 # QuerySet 使用主键
                 if isinstance(value, QuerySet):
                     primary_key = value.model.__primary_key__
@@ -287,7 +313,7 @@ class WhereNode:
                     raw_sql = ' ' + field + ' in %s '
                     params = [tuple(value)]
 
-        return raw_sql, params
+        return join_set, raw_sql, params
 
     def _add_q(self, q_object):
         self.filter_Q.add(q_object, 'AND')
@@ -337,7 +363,6 @@ class Query:
         field_info = self.model.field_info
 
         if self.where:
-            where_expr += ' where '
             where_sql, where_params = self.where.as_sql()
             where_expr += where_sql
             params.extend(where_params)
