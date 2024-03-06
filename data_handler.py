@@ -295,7 +295,7 @@ class WhereNode:
                     raise TypeError(
                         '%s and %s are not in the same database ' % (temp_model.__name__, value.model.__name__))
                 # QuerySet 使用主键
-                if isinstance(value, QuerySet):
+                if type(value) == QuerySet:
                     primary_key = value.model.__primary_key__
                     if not primary_key:
                         raise TypeError('Primary key not defined in class: %s' % value.model.__name__)
