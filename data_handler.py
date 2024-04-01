@@ -1,6 +1,8 @@
 # coding: utf-8
 from functools import partial
-import pymysql
+
+# https://pypi.org/project/pymysql-pool/
+import pymysqlpool
 
 
 class Aggregate:
@@ -264,7 +266,7 @@ class WhereNode:
                 temp_model = foreign_key.to_model
                 to_field = foreign_key.to_field
                 join_sql = 'inner join %s on %s = %s' % (temp_model.table_info(), temp_model.field_info(to_field),
-                                                          self.model.field_info(foreign_field))
+                                                         self.model.field_info(foreign_field))
                 join_set.add(join_sql)
         else:
             field = query_str
@@ -910,43 +912,34 @@ class Database:
     @classmethod
     def connect(cls, **databases):
         for db_label, db_config in databases.items():
-            cls.conn[db_label] = pymysql.connect(host=db_config.get('host', 'localhost'),
-                                                 port=int(db_config.get('port', 3306)),
-                                                 user=db_config.get('user', 'root'),
-                                                 passwd=db_config.get('password', ''),
-                                                 db=db_config.get('database', 'test'),
-                                                 charset=db_config.get('charset', 'utf8'),
-                                                 autocommit=True)
-        cls.db_config.update(databases)
-
-    @classmethod
-    def get_conn(cls, db_label):
-        if not cls.conn[db_label] or not cls.conn[db_label].open:
-            cls.connect(**cls.db_config)
-        try:
-            cls.conn[db_label].ping()
-        except pymysql.OperationalError:
-            cls.connect(**cls.db_config)
-        return cls.conn[db_label]
+            cls.conn[db_label] = pymysqlpool.ConnectionPool(size=db_config.get('pool_min', 1),
+                                                            maxsize=db_config.get('pool_max', 1),
+                                                            pre_create_num=db_config.get('pool_min', 1),
+                                                            name=db_config.get('database', 'test'),
+                                                            host=db_config.get('host', 'localhost'),
+                                                            port=int(db_config.get('port', 3306)),
+                                                            user=db_config.get('user', 'root'),
+                                                            password=db_config.get('password', ''),
+                                                            database=db_config.get('database', 'test'),
+                                                            charset=db_config.get('charset', 'utf8'),
+                                                            autocommit=True)
+        cls.db_config.update(**databases)
 
     @classmethod
     def execute(cls, db_label, *args):
-        db_conn = cls.get_conn(db_label)
-        cursor = db_conn.cursor()
-        cursor.execute(*args)
-        return cursor
+        db_conn = cls.conn[db_label].get_connection()
+        with db_conn:
+            with db_conn.cursor() as cursor:
+                cursor.execute(*args)
+                return cursor
 
     @classmethod
     def executemany(cls, db_label, *args):
-        db_conn = cls.get_conn(db_label)
-        cursor = db_conn.cursor()
-        cursor.executemany(*args)
-        return cursor
-
-    def __del__(self):
-        for _, conn in self.conn:
-            if conn and conn.open:
-                conn.close()
+        db_conn = cls.conn[db_label].get_connection()
+        with db_conn:
+            with db_conn.cursor() as cursor:
+                cursor.executemany(*args)
+                return cursor
 
 
 def execute_raw_sql(db_label, sql, params=None):

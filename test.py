@@ -7,7 +7,9 @@ db_config = {
         'port': 3306,
         'user': 'root',
         'password': '123456',
-        'database': 'test'
+        'database': 'test',
+        'pool_min': 1,
+        'pool_max': 5
     }
 }
 Database.connect(**db_config)
@@ -94,7 +96,7 @@ first.save()
 filter_result.update(b=F('b') + 11)
 
 # group by
-group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id'))
+group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id')).values('a')
 print(group_value.query)
 for obj in group_value:
     print(obj['a'], obj['sum_b'], obj['max_id'])
