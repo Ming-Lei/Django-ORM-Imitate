@@ -533,7 +533,7 @@ class QuerySet(object):
     def annotate(self, **kwargs):
         ModelCheck(self.model).field_wash([x.field for x in kwargs.values()])
         self.query.annotates.update(kwargs)
-        return self._clone(ValuesQuerySet)
+        return self._clone(ValuesQuerySet, self.query.group_by)
 
     # distinct
     def distinct(self, *field_names):
@@ -571,7 +571,7 @@ class QuerySet(object):
         if klass is None:
             klass = self.__class__
         query = self.query.clone()
-        if select:
+        if select is not None:
             query.select = list(select[:])
         if flat:
             query.flat = flat

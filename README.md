@@ -137,12 +137,12 @@ Group by
 ------
 
 ```python
-from data_handler import Sum, Max
+from data_handler import Sum, Max, Count
 
-group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id'))
+group_value = filter_result.group_by('a').annotate(count_a=Count('a'), sum_b=Sum('b'), max_id=Max('id'))
 print(group_value.query)
 for obj in group_value:
-    print(obj['a'], obj['sum_b'], obj['max_id'])
+    print(obj['a'], obj['count_a'], obj['sum_b'], obj['max_id'])
 ```
 
 Execute raw SQL

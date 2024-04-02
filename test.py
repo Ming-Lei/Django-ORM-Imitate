@@ -1,4 +1,4 @@
-from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max, ForeignKey
+from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max, ForeignKey, Count
 
 # connect database
 db_config = {
@@ -96,10 +96,10 @@ first.save()
 filter_result.update(b=F('b') + 11)
 
 # group by
-group_value = filter_result.group_by('a').annotate(sum_b=Sum('b'), max_id=Max('id')).values('a')
+group_value = filter_result.group_by('a').annotate(count_a=Count('a'), sum_b=Sum('b'), max_id=Max('id'))
 print(group_value.query)
 for obj in group_value:
-    print(obj['a'], obj['sum_b'], obj['max_id'])
+    print(obj['a'], obj['count_a'], obj['sum_b'], obj['max_id'])
 
 # execute raw sql
 results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))
