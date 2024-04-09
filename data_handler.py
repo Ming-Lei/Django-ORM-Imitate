@@ -509,7 +509,7 @@ class QuerySet(object):
     # values
     def values(self, *args):
         fields_list, _ = ModelCheck(self.model).field_wash(args)
-        return self._clone(ValuesQuerySet, fields_list)
+        return self._clone(ValuesQuerySet, fields_list or None)
 
     # values_list
     def values_list(self, *args, **kwargs):
@@ -520,7 +520,7 @@ class QuerySet(object):
         if flat and len(args) > 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
 
-        return self._clone(ValuesListQuerySet, fields_list, flat)
+        return self._clone(ValuesListQuerySet, fields_list or None, flat)
 
     # group_by
     def group_by(self, *args):
