@@ -1,5 +1,4 @@
 # coding: utf-8
-from functools import partial
 
 # https://pypi.org/project/pymysql-pool/
 import pymysqlpool
@@ -45,13 +44,6 @@ class Field:
         self.primary_key = kw.get('primary_key', False)
         self.db_column = kw.get('db_column', None)
         self.name = kw.get('name', None)
-
-
-class ForeignKey(Field):
-    def __init__(self, **kw):
-        super(ForeignKey, self).__init__(**kw)
-        self.to_model = kw.get('to')
-        self.to_field = kw.get('to_field', 'pk')
 
 
 class Combinable:
@@ -175,27 +167,24 @@ class WhereNode:
         where_expr = ''
 
         if self.filter_Q:
-            join_sql, temp_sql, temp_params = self.sql_expr(self.filter_Q)
-            where_expr += join_sql + ' where ' + temp_sql
+            temp_sql, temp_params = self.sql_expr(self.filter_Q)
+            where_expr += temp_sql
             params.extend(temp_params)
 
         return where_expr, params
 
     # 构建sql查询语句
     def _sql_expr(self, q_query):
-        params = []
         sql_list = []
-        join_set = set()
+        params = []
         for child in q_query.children:
             if not isinstance(child, Q):
-                temp_set, temp_sql, temp_params = self.magic_query(child)
-                join_set.update(temp_set)
+                temp_sql, temp_params = self.magic_query(child)
                 sql_list.append(temp_sql)
                 params.extend(temp_params)
             else:
-                temp_set, temp_sql, temp_params = self._sql_expr(child)
+                temp_sql, temp_params = self._sql_expr(child)
                 if temp_sql:
-                    join_set.update(temp_set)
                     if child.negated:
                         temp_sql = [' not ' + x for x in temp_sql]
                     raw_sql = child.connector.join(temp_sql)
@@ -203,12 +192,12 @@ class WhereNode:
                         raw_sql = ' ( ' + raw_sql + ' ) '
                     sql_list.append(raw_sql)
                     params.extend(temp_params)
-        return join_set, sql_list, params
+        return sql_list, params
 
     # 取得对应sql及参数
     def sql_expr(self, q_query):
-        join_set, sql_list, params = self._sql_expr(q_query)
-        return ' '.join(join_set), q_query.connector.join(sql_list), params
+        sql_list, params = self._sql_expr(q_query)
+        return q_query.connector.join(sql_list), params
 
     def f_expr(self, value):
         if isinstance(value, F):
@@ -242,32 +231,10 @@ class WhereNode:
         }
         raw_sql = ''
         params = []
-        join_set = set()
         temp_model = self.model
         query_str, value = child_query
-        # 双下划线特殊查询
         if '__' in query_str:
-            foreign_field = None
-            magic_list = query_str.split('__')
-            # 判断是否为外键查询
-            if len(magic_list) == 2:
-                field, magic = magic_list
-                if magic not in correspond_dict and magic not in ['isnull', 'range', 'in']:
-                    foreign_field, field, magic = field, magic, ''
-            elif len(magic_list) == 3:
-                foreign_field, field, magic = magic_list
-            else:
-                raise TypeError('Unsupported magic query %s' % query_str)
-            # 外键查询处理
-            if foreign_field:
-                if foreign_field.endswith('_id'):
-                    foreign_field = foreign_field[:-3]
-                foreign_key = self.model.attrs[foreign_field]
-                temp_model = foreign_key.to_model
-                to_field = foreign_key.to_field
-                join_sql = 'inner join %s on %s = %s' % (temp_model.table_info(), temp_model.field_info(to_field),
-                                                         self.model.field_info(foreign_field))
-                join_set.add(join_sql)
+            field, magic = query_str.split('__')
         else:
             field = query_str
             magic = ''
@@ -315,7 +282,7 @@ class WhereNode:
                     raw_sql = ' ' + field + ' in %s '
                     params = [tuple(value)]
 
-        return join_set, raw_sql, params
+        return raw_sql, params
 
     def _add_q(self, q_object):
         self.filter_Q.add(q_object, 'AND')
@@ -335,6 +302,7 @@ class Query:
         self.fields_list = self.model.field_list
 
         self.flat = False
+        self.join_on = []
         self.group_by = []
         self.annotates = {}
         self.limit_dict = {}
@@ -366,7 +334,7 @@ class Query:
 
         if self.where:
             where_sql, where_params = self.where.as_sql()
-            where_expr += where_sql
+            where_expr += ' where ' + where_sql
             params.extend(where_params)
 
         if self.order_fields:
@@ -435,6 +403,7 @@ class Query:
         obj.flat = self.flat
         obj.select = self.select[:]
         obj.distinct = self.distinct
+        obj.join_on = self.join_on[:]
         obj.where = self.where.clone()
         obj.group_by = self.group_by[:]
         obj.annotates.update(self.annotates)
@@ -545,6 +514,11 @@ class QuerySet(object):
             field_names, _ = ModelCheck(self.model).field_wash(field_names)
             clone.query.select = list(field_names)
         clone.query.distinct = True
+        return clone
+
+    # todo join on
+    def join(self, on, table_as, **kwargs):
+        clone = self._clone()
         return clone
 
     # sql查询基础函数
@@ -742,6 +716,9 @@ class Manager:
     def first(self):
         return self.get_queryset().first()
 
+    def join(self, *args, **kwargs):
+        return self.get_queryset().join(*args, **kwargs)
+
     def exists(self):
         return self.get_queryset().exists()
 
@@ -758,8 +735,7 @@ class Manager:
         return self.get_queryset().values_list(*args, **kwargs)
 
     def bulk_create(self, objs, ignore_conflicts=False):
-        if_foreign = lambda x: isinstance(self.model.attrs[x], ForeignKey)
-        fields = [x + '_id' if if_foreign(x) else x for x in self.model.field_list]
+        fields = self.model.field_list
         items = [[getattr(obj, field, None) for field in fields] for obj in objs]
         obj_value = ', '.join(['%s'] * len(fields))
         insert = 'insert %s into %s(%s) values(%s);' % ('ignore' if ignore_conflicts else '', self.model.table_info(),
@@ -786,16 +762,7 @@ class MetaModel(type):
         for base in mro_list[::-1]:
             attr_dict.update(base.__dict__)
         for key, val in attr_dict.items():
-            if isinstance(val, ForeignKey):
-                val.name = key
-                attrs[key] = val
-                attrs[key + '_id'] = Field(name=key)
-                setattr(cls, key + '_id', Field(name=key))
-                _get_foreign = partial(cls._get_foreign, field=key)
-                _set_foreign = partial(cls._set_foreign, field=key)
-                setattr(cls, key, property(_get_foreign, _set_foreign))
-                field_list.append(key)
-            elif isinstance(val, Field):
+            if isinstance(val, Field):
                 val.name = key
                 if val.primary_key:
                     if primary_key:
@@ -836,20 +803,6 @@ class Model(metaclass=MetaModel):
         setattr(self, primary_key, value)
 
     pk = property(_get_pk_val, _set_pk_val)
-
-    def _get_foreign(self, field):
-        self_value = getattr(self, field + '_id', None)
-        if self_value:
-            foreign_key = self.attrs[field]
-            to_model = foreign_key.to_model
-            to_field = foreign_key.to_field
-            return to_model.objects.filter(**{to_field: self_value}).first()
-
-    def _set_foreign(self, val, field):
-        if isinstance(val, Model):
-            to_field = self.attrs[field].to_field
-            val = getattr(val, to_field, None)
-        setattr(self, field + '_id', val)
 
     def __repr__(self):
         return '<%s obj>' % self.__class__.__name__
