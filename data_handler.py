@@ -241,7 +241,7 @@ class WhereNode:
                                          (temp_field == 'pk' and temp_model.__primary_key__)):
                 field, magic = temp_field, magic_list[0]
             elif temp_field in self.join_as:
-                temp_model = self.join_as[temp_field]
+                temp_model = self.join_as[temp_field]['join_model']
                 if len(magic_list) == 1:
                     field, magic = magic_list[0], ''
                 elif len(magic_list) == 2:
@@ -317,7 +317,6 @@ class Query:
         self.select = []
         self.flat = False
         self.join_as = {}
-        self.join_on = []
         self.group_by = []
         self.annotates = {}
         self.limit_dict = {}
@@ -349,12 +348,13 @@ class Query:
         # join
         join_sql = ''
         join_field = []
-        for on, kwargs in self.join_on:
-            join_field.extend(on.field_info(x) for x in on.field_list)
-            temp_join = ' join ' + on.table_info() + ' on '
+        for table_as, join_info in self.join_as.items():
+            join_model, join_on = join_info['join_model'], join_info['join_on']
+            join_field.extend(field_info(table_as + '__' + x) for x in join_model.field_list)
+            temp_join = ' join ' + join_model.table_info() + ' on '
             on_list = []
-            for k, v in kwargs:
-                on_list.append(field_info(k) + ' = ' + on.field_info(v))
+            for k, v in join_on:
+                on_list.append(field_info(k) + ' = ' + field_info(v))
             temp_join += ' and '.join(on_list)
             join_sql += temp_join
 
@@ -436,7 +436,6 @@ class Query:
         obj.flat = self.flat
         obj.select = self.select[:]
         obj.distinct = self.distinct
-        obj.join_on = self.join_on[:]
         obj.where = self.where.clone()
         obj.group_by = self.group_by[:]
         obj.join_as.update(self.join_as)
@@ -558,12 +557,11 @@ class QuerySet(object):
         elif table_as in clone.query.join_as:
             raise TypeError("alias '%s' is already exists" % table_as)
 
-        key_list, _ = ModelCheck(self.model).field_wash(kwargs.keys())
-        values_list, _ = ModelCheck(on).field_wash(kwargs.values())
-
-        clone.query.join_as[table_as] = on
-        clone.query.where.join_as[table_as] = on
-        clone.query.join_on.append((on, tuple(zip(key_list, values_list))))
+        clone.query.join_as[table_as] = {'join_model': on, 'join_on': []}
+        key_list, _ = ModelCheck(self.model, clone.query.join_as).field_wash(kwargs.keys())
+        values_list, _ = ModelCheck(on, clone.query.join_as).field_wash(kwargs.values())
+        clone.query.join_as[table_as] = clone.query.where.join_as[table_as] = \
+            {'join_model': on, 'join_on': tuple(zip(key_list, values_list))}
         return clone
 
     # sql查询基础函数
@@ -656,7 +654,8 @@ class QuerySet(object):
     def data_to_obj(self, value):
         start_index = len(self.fields_list)
         inst = self.model(**dict(zip(self.fields_list, value[:start_index])))
-        for table_as, join_model in self.query.join_as.items():
+        for table_as, join_info in self.query.join_as.items():
+            join_model = join_info['join_model']
             temp_len = len(join_model.field_list)
             temp_obj = join_model(**dict(zip(join_model.field_list, value[start_index:start_index + temp_len])))
             setattr(inst, table_as, temp_obj)
@@ -683,8 +682,8 @@ class ValuesQuerySet(QuerySet):
         self.select_field = self.query.select + list(self.query.annotates.keys())
         if not self.select_field:
             self.select_field.extend(x for x in self.model.field_list)
-            for table_as, join_model in self.query.join_as.items():
-                self.select_field.extend(table_as + '__' + x for x in join_model.field_list)
+            for table_as, join_info in self.query.join_as.items():
+                self.select_field.extend(table_as + '__' + x for x in join_info['join_model'].field_list)
 
     def __iter__(self):
         self.select()
@@ -741,7 +740,7 @@ class ModelCheck:
                 minus, field = '-', field[1:]
             if '__' in field:
                 temp_as, field = field.split('__')
-                join_as, temp_model = temp_as + '__', self.join_as[temp_as]
+                join_as, temp_model = temp_as + '__', self.join_as[temp_as]['join_model']
             else:
                 join_as, temp_model = '', self.model
             field_obj = temp_model.attrs.get(field, None)
@@ -754,7 +753,7 @@ class ModelCheck:
             for key, value in fields_dict.items():
                 if '__' in key:
                     temp_as, key = key.split('__')
-                    join_as, temp_model = temp_as + '__', self.join_as[temp_as]
+                    join_as, temp_model = temp_as + '__', self.join_as[temp_as]['join_model']
                 else:
                     join_as, temp_model = '', self.model
                 field_obj = temp_model.attrs.get(key, None)
@@ -769,7 +768,7 @@ class ModelCheck:
         else:
             temp_as, field = field_name.split('__')
             if temp_as in self.join_as:
-                return self.join_as[temp_as].field_info(field)
+                return self.join_as[temp_as]['join_model'].field_info(field)
             raise TypeError('Cannot resolve keyword %s into field.' % field_name)
 
 
