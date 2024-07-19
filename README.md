@@ -36,6 +36,16 @@ class TestModel(Model):
         db_table = 'test'  # If not filled, the db_table is class name 
         db_label = 'default'  # If not filled, the db_label is default  
 
+
+class TestForeignModel(Model):
+    id = Field(primary_key=True)
+    a = Field()
+    c = Field()
+
+    class Meta:
+        db_table = 'test_foreign'
+        db_label = 'default'
+
 # use abstract class
 # class TestModelBasic(Model):
 #     id = Field(primary_key=True)
@@ -44,13 +54,13 @@ class TestModel(Model):
 #     class Meta:
 #         abstract = True
 # 
-# 
-# class TestModel(TestModelBasic):
-#     b = Field(db_column='bb')
+# class TestForeignModel(TestModelBasic):
+#     c = Field()
 # 
 #     class Meta:
-#         db_table = 'test'
+#         db_table = 'test_foreign'
 #         db_label = 'default'
+
 ```
 
 Insert
@@ -81,11 +91,11 @@ temp_list = [
 ]
 
 objs_list = []
-for (temp_a, temp_b) in temp_list:
-    obj = TestModel(a=temp_a, b=temp_b)
+for (temp_a, temp_c) in temp_list:
+    obj = TestForeignModel(a=temp_a, c=temp_c)
     objs_list.append(obj)
 
-TestModel.objects.bulk_create(objs_list)
+TestForeignModel.objects.bulk_create(objs_list)
 ```
 
 Query
@@ -94,7 +104,7 @@ Query
 ```python
 from data_handler import Q
 
-filter_result = TestModel.objects.filter(Q(a='Rick') | Q(a='Morty'), pk__gt=1).exclude(b__in=[3, 4])
+filter_result = TestModel.objects.filter(Q(a='Rick') | Q(a='Morty'), pk__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 
 for r in filter_result[:5]:
@@ -145,6 +155,19 @@ for obj in group_value:
     print(obj['a'], obj['count_a'], obj['sum_b'], obj['max_id'])
 ```
 
+Join 
+------
+
+```python
+
+join_filter = TestModel.objects.join(on=TestForeignModel, table_as='tfm', a='a').filter(b__gte=2, tfm__c__lte=10, 
+                                                                                        pk__lte=F('tfm__id'))[:10]
+print(join_filter.query)
+for obj in join_filter:
+    tfm = obj.tfm
+    print(obj.id, obj.a, obj.b, tfm.id, tfm.a, tfm.c)
+```
+
 Execute raw SQL
 ---------------
 
@@ -154,55 +177,5 @@ from data_handler import execute_raw_sql
 results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))
 for val, cnt in results:
     print(val, cnt)
-```
 
-Foreign key
----------------
-
-```python
-from data_handler import Model, Field, ForeignKey
-
-class TestForeignModel(Model):
-    id = Field(primary_key=True)  # primary_key is optional
-    a = Field()
-    c = ForeignKey(to=TestModel, to_field="pk")
-
-    class Meta:
-        db_table = 'test_foreign'
-        db_label = 'default'
-```
-
-Insert
-------
-
-```python
-# create
-obj = TestForeignModel(a='Rick', c=first)
-obj.save()
-print(obj.pk)
-
-obj = TestForeignModel(a='Rick', c=2)
-obj.save()
-print(obj.pk)
-
-# bulk create
-objs_list = []
-for temp_a in ['Morty', 'Jerry', 'Beth', 'Summer']:
-    for x in range(1, 3):
-        obj = TestForeignModel(a=temp_a, c=x)
-        objs_list.append(obj)
-
-TestForeignModel.objects.bulk_create(objs_list)
-```
-
-Query
------
-
-```python
-foreign_values = TestForeignModel.objects.filter(c__a='Rick', c__b__lte=5)[:2]
-print(foreign_values.query)
-for obj in foreign_values:
-    obj_c = obj.c
-    print(type(obj_c))
-    print(obj_c.pk, obj_c.a, obj_c.b)
 ```

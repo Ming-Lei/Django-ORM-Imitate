@@ -1,4 +1,4 @@
-from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max, Count
+from data_handler import Database, Model, Field, execute_raw_sql, Q, Sum, F, Max, Count, Min
 
 # connect database
 db_config = {
@@ -64,14 +64,14 @@ temp_list = [
 ]
 
 objs_list = []
-for (temp_a, temp_b) in temp_list:
-    obj = TestModel(a=temp_a, b=temp_b)
+for (temp_a, temp_c) in temp_list:
+    obj = TestForeignModel(a=temp_a, c=temp_c)
     objs_list.append(obj)
 
-TestModel.objects.bulk_create(objs_list)
+TestForeignModel.objects.bulk_create(objs_list)
 
 # select
-filter_result = TestModel.objects.filter(Q(a='Rick') | Q(a='Morty'), pk__gt=1).exclude(b__in=[3, 4])
+filter_result = TestModel.objects.filter(Q(a='Rick') | Q(a='Morty'), pk__gte=1).exclude(b__in=[3, 4])
 print(filter_result.query)
 print(filter_result.count())
 
@@ -100,6 +100,14 @@ group_value = filter_result.group_by('a').annotate(count_a=Count('a'), sum_b=Sum
 print(group_value.query)
 for obj in group_value:
     print(obj['a'], obj['count_a'], obj['sum_b'], obj['max_id'])
+
+# join
+join_filter = TestModel.objects.join(on=TestForeignModel, table_as='tfm', a='a').filter(b__gte=2, tfm__c__lte=10,
+                                                                                        pk__lte=F('tfm__id'))[:5]
+print(join_filter.query)
+for obj in join_filter:
+    tfm = obj.tfm
+    print(obj.id, obj.a, obj.b, tfm.id, tfm.a, tfm.c)
 
 # execute raw sql
 results = execute_raw_sql('default', 'select bb, count(*) from test where bb = %s group by bb;', (1,))

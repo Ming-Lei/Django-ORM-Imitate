@@ -159,6 +159,7 @@ class Q:
 
 class WhereNode:
     def __init__(self, model):
+        self.join_as = {}
         self.model = model
         self.filter_Q = Q()
 
@@ -201,8 +202,8 @@ class WhereNode:
 
     def f_expr(self, value):
         if isinstance(value, F):
-            fields_list, _ = ModelCheck(self.model).field_wash([value.name])
-            return self.model.field_info(fields_list[0]), []
+            field_name = ModelCheck(self.model, self.join_as).field_info(value.name)
+            return field_name, []
         params = []
         raw_sql_list = []
         for temp_f in [value.lhs, value.rhs]:
@@ -234,10 +235,21 @@ class WhereNode:
         temp_model = self.model
         query_str, value = child_query
         if '__' in query_str:
-            field, magic = query_str.split('__')
+            field = magic = ''
+            temp_field, *magic_list = query_str.split('__')
+            if len(magic_list) == 1 and (temp_field in temp_model.field_list or
+                                         (temp_field == 'pk' and temp_model.__primary_key__)):
+                field, magic = temp_field, magic_list[0]
+            elif temp_field in self.join_as:
+                temp_model = self.join_as[temp_field]
+                if len(magic_list) == 1:
+                    field, magic = magic_list[0], ''
+                elif len(magic_list) == 2:
+                    field, magic = magic_list[0], magic_list[1]
+            if not field:
+                raise TypeError('Cannot resolve keyword %s into field.' % temp_field)
         else:
-            field = query_str
-            magic = ''
+            field, magic = query_str, ''
         field = temp_model.field_info(field)
         temp_sql = correspond_dict.get(magic)
         if temp_sql:
@@ -289,6 +301,7 @@ class WhereNode:
 
     def clone(self):
         clone = WhereNode(self.model)
+        clone.join_as.update(self.join_as)
         clone.filter_Q.add(self.filter_Q, 'AND')
         return clone
 
@@ -301,7 +314,9 @@ class Query:
         self.model = model
         self.fields_list = self.model.field_list
 
+        self.select = []
         self.flat = False
+        self.join_as = {}
         self.join_on = []
         self.group_by = []
         self.annotates = {}
@@ -309,7 +324,6 @@ class Query:
         self.distinct = False
         self.order_fields = []
         self.where = WhereNode(model)
-        self.select = self.fields_list
 
     def __str__(self):
         sql, params = self.sql_expr()
@@ -328,10 +342,24 @@ class Query:
             # group_by 不支持 update、delete
             raise TypeError('Cannot execute with group by query.')
 
-        params = []
-        where_expr = ''
-        field_info = self.model.field_info
+        check_obj = ModelCheck(self.model, self.join_as)
+        field_info = check_obj.field_info
+        table_info = self.model.table_info()
 
+        # join
+        join_sql = ''
+        join_field = []
+        for on, kwargs in self.join_on:
+            join_field.extend(on.field_info(x) for x in on.field_list)
+            temp_join = ' join ' + on.table_info() + ' on '
+            on_list = []
+            for k, v in kwargs:
+                on_list.append(field_info(k) + ' = ' + on.field_info(v))
+            temp_join += ' and '.join(on_list)
+            join_sql += temp_join
+
+        params = []
+        where_expr = join_sql
         if self.where:
             where_sql, where_params = self.where.as_sql()
             where_expr += ' where ' + where_sql
@@ -361,7 +389,6 @@ class Query:
             where_expr += ' offset %s '
             params.append(offset)
 
-        table_info = self.model.table_info()
         # 构建不同操作的sql语句
         if method == 'update' and update_dict:
             _keys = []
@@ -382,7 +409,13 @@ class Query:
         elif method == 'delete':
             sql = 'delete from %s %s;' % (table_info, where_expr)
         else:
-            field_list = [field_info(x) for x in self.select]
+
+            if self.select:
+                field_list = [field_info(x) for x in self.select]
+            else:
+                field_list = [field_info(x) for x in self.fields_list]
+                field_list.extend(join_field)
+
             # 聚合查询
             for k, v in self.annotates.items():
                 field_list.append('%s as %s' % (v.sql_expr(field_info), k))
@@ -406,6 +439,7 @@ class Query:
         obj.join_on = self.join_on[:]
         obj.where = self.where.clone()
         obj.group_by = self.group_by[:]
+        obj.join_as.update(self.join_as)
         obj.annotates.update(self.annotates)
         obj.limit_dict.update(self.limit_dict)
         obj.order_fields = self.order_fields[:]
@@ -456,7 +490,7 @@ class QuerySet(object):
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         obj = self._clone()
-        args, _ = ModelCheck(self.model).field_wash(args)
+        args, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
         obj.query.order_fields = args
         return obj
 
@@ -477,13 +511,13 @@ class QuerySet(object):
 
     # values
     def values(self, *args):
-        fields_list, _ = ModelCheck(self.model).field_wash(args)
+        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
         return self._clone(ValuesQuerySet, fields_list or None)
 
     # values_list
     def values_list(self, *args, **kwargs):
         # 字段检查
-        fields_list, _ = ModelCheck(self.model).field_wash(args)
+        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
         flat = kwargs.pop('flat', False)
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
@@ -493,14 +527,14 @@ class QuerySet(object):
 
     # group_by
     def group_by(self, *args):
-        fields_list, _ = ModelCheck(self.model).field_wash(args)
+        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
         clone = self._clone()
         clone.query.group_by += fields_list
         return clone
 
     # annotate
     def annotate(self, **kwargs):
-        ModelCheck(self.model).field_wash([x.field for x in kwargs.values()])
+        ModelCheck(self.model, self.query.join_as).field_wash([x.field for x in kwargs.values()])
         self.query.annotates.update(kwargs)
         return self._clone(ValuesQuerySet, self.query.group_by)
 
@@ -511,14 +545,25 @@ class QuerySet(object):
         else:
             clone = self._clone()
         if field_names:
-            field_names, _ = ModelCheck(self.model).field_wash(field_names)
+            field_names, _ = ModelCheck(self.model, self.query.join_as).field_wash(field_names)
             clone.query.select = list(field_names)
         clone.query.distinct = True
         return clone
 
-    # todo join on
+    # join on
     def join(self, on, table_as, **kwargs):
         clone = self._clone()
+        if table_as in self.model.field_list:
+            raise TypeError("'%s' is an field for model '%s'" % (table_as, self.model.__name__))
+        elif table_as in clone.query.join_as:
+            raise TypeError("alias '%s' is already exists" % table_as)
+
+        key_list, _ = ModelCheck(self.model).field_wash(kwargs.keys())
+        values_list, _ = ModelCheck(on).field_wash(kwargs.values())
+
+        clone.query.join_as[table_as] = on
+        clone.query.where.join_as[table_as] = on
+        clone.query.join_on.append((on, tuple(zip(key_list, values_list))))
         return clone
 
     # sql查询基础函数
@@ -539,7 +584,7 @@ class QuerySet(object):
     # 索引值查询
     def get_index(self, index):
         index_value = self.base_index(index)
-        return self.model(**dict(zip(self.fields_list, index_value)))
+        return self.data_to_obj(index_value)
 
     def _clone(self, klass=None, select=None, flat=False):
         if klass is None:
@@ -608,11 +653,21 @@ class QuerySet(object):
         else:
             return None
 
+    def data_to_obj(self, value):
+        start_index = len(self.fields_list)
+        inst = self.model(**dict(zip(self.fields_list, value[:start_index])))
+        for table_as, join_model in self.query.join_as.items():
+            temp_len = len(join_model.field_list)
+            temp_obj = join_model(**dict(zip(join_model.field_list, value[start_index:start_index + temp_len])))
+            setattr(inst, table_as, temp_obj)
+            start_index += temp_len
+        return inst
+
     # 返回自定义迭代器
     def __iter__(self):
         self.select()
         for value in self.select_result:
-            inst = self.model(**dict(zip(self.fields_list, value)))
+            inst = self.data_to_obj(value)
             yield inst
 
     def __bool__(self):
@@ -626,6 +681,10 @@ class ValuesQuerySet(QuerySet):
     def __init__(self, *args, **kwargs):
         super(ValuesQuerySet, self).__init__(*args, **kwargs)
         self.select_field = self.query.select + list(self.query.annotates.keys())
+        if not self.select_field:
+            self.select_field.extend(x for x in self.model.field_list)
+            for table_as, join_model in self.query.join_as.items():
+                self.select_field.extend(table_as + '__' + x for x in join_model.field_list)
 
     def __iter__(self):
         self.select()
@@ -670,8 +729,9 @@ class ValuesListQuerySet(QuerySet):
 
 
 class ModelCheck:
-    def __init__(self, model):
+    def __init__(self, model, join_as=None):
         self.model = model
+        self.join_as = join_as or {}
 
     def field_wash(self, fields_list, fields_dict=None):
         temp_list = []
@@ -679,19 +739,38 @@ class ModelCheck:
             minus = ''
             if field[0] == '-':
                 minus, field = '-', field[1:]
-            field_obj = self.model.attrs.get(field, None)
+            if '__' in field:
+                temp_as, field = field.split('__')
+                join_as, temp_model = temp_as + '__', self.join_as[temp_as]
+            else:
+                join_as, temp_model = '', self.model
+            field_obj = temp_model.attrs.get(field, None)
             if not field_obj:
                 raise TypeError('Cannot resolve keyword %s into field.' % field)
-            temp_list.append(minus + field_obj.name)
+            temp_list.append(minus + join_as + field_obj.name)
 
         temp_dict = {}
         if fields_dict:
             for key, value in fields_dict.items():
-                field_obj = self.model.attrs.get(key, None)
+                if '__' in key:
+                    temp_as, key = key.split('__')
+                    join_as, temp_model = temp_as + '__', self.join_as[temp_as]
+                else:
+                    join_as, temp_model = '', self.model
+                field_obj = temp_model.attrs.get(key, None)
                 if not field_obj:
                     raise TypeError('Cannot resolve keyword %s into field.' % key)
-                temp_dict[field_obj.name] = value
+                temp_dict[join_as + field_obj.name] = value
         return temp_list, temp_dict
+
+    def field_info(self, field_name):
+        if '__' not in field_name:
+            return self.model.field_info(field_name)
+        else:
+            temp_as, field = field_name.split('__')
+            if temp_as in self.join_as:
+                return self.join_as[temp_as].field_info(field)
+            raise TypeError('Cannot resolve keyword %s into field.' % field_name)
 
 
 class Manager:
