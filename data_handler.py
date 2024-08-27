@@ -365,6 +365,9 @@ class Query:
             where_expr += ' where ' + where_sql
             params.extend(where_params)
 
+        if self.group_by:
+            where_expr += ' group by ' + ', '.join(field_info(x) for x in self.group_by)
+
         if self.order_fields:
             where_expr += ' order by '
             order_list = []
@@ -375,9 +378,6 @@ class Query:
                 else:
                     order_list.append(field_info(field))
             where_expr += ' , '.join(order_list)
-
-        if self.group_by:
-            where_expr += ' group by ' + ', '.join(field_info(x) for x in self.group_by)
 
         # limit offset
         if limit is None and offset is not None:
