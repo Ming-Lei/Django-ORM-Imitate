@@ -202,7 +202,7 @@ class WhereNode:
 
     def f_expr(self, value):
         if isinstance(value, F):
-            field_name = ModelCheck(self.model, self.join_as).field_info(value.name)
+            field_name = ModelCheck(self).field_info(value.name)
             return field_name, []
         params = []
         raw_sql_list = []
@@ -341,7 +341,7 @@ class Query:
             # group_by 不支持 update、delete
             raise TypeError('Cannot execute with group by query.')
 
-        check_obj = ModelCheck(self.model, self.join_as)
+        check_obj = ModelCheck(self)
         field_info = check_obj.field_info
         table_info = self.model.table_info()
 
@@ -482,14 +482,14 @@ class QuerySet(object):
     # update
     def update(self, **kwargs):
         if kwargs:
-            _, kwargs = ModelCheck(self.model).field_wash(fields_list=[], fields_dict=kwargs)
+            _, kwargs = ModelCheck(self.query).field_wash(fields_list=[], fields_dict=kwargs)
             sql, params = self.query.sql_expr(method='update', update_dict=kwargs)
             Database.execute(self.model.__db_label__, sql, params)
 
     # order_by函数，返回一个新的QuerySet对象
     def order_by(self, *args):
         obj = self._clone()
-        args, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
+        args, _ = ModelCheck(self.query).field_wash(args)
         obj.query.order_fields = args
         return obj
 
@@ -510,13 +510,13 @@ class QuerySet(object):
 
     # values
     def values(self, *args):
-        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
+        fields_list, _ = ModelCheck(self.query).field_wash(args)
         return self._clone(ValuesQuerySet, fields_list or None)
 
     # values_list
     def values_list(self, *args, **kwargs):
         # 字段检查
-        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
+        fields_list, _ = ModelCheck(self.query).field_wash(args)
         flat = kwargs.pop('flat', False)
         # flat 只能返回一个字段列表
         if flat and len(args) > 1:
@@ -526,14 +526,14 @@ class QuerySet(object):
 
     # group_by
     def group_by(self, *args):
-        fields_list, _ = ModelCheck(self.model, self.query.join_as).field_wash(args)
+        fields_list, _ = ModelCheck(self.query).field_wash(args)
         clone = self._clone()
         clone.query.group_by += fields_list
         return clone
 
     # annotate
     def annotate(self, **kwargs):
-        ModelCheck(self.model, self.query.join_as).field_wash([x.field for x in kwargs.values()])
+        ModelCheck(self.query).field_wash([x.field for x in kwargs.values()])
         self.query.annotates.update(kwargs)
         return self._clone(ValuesQuerySet, self.query.group_by)
 
@@ -544,24 +544,23 @@ class QuerySet(object):
         else:
             clone = self._clone()
         if field_names:
-            field_names, _ = ModelCheck(self.model, self.query.join_as).field_wash(field_names)
+            field_names, _ = ModelCheck(self.query).field_wash(field_names)
             clone.query.select = list(field_names)
         clone.query.distinct = True
         return clone
 
     # join on
-    def join(self, on, table_as, **kwargs):
+    def join(self, join_model, table_as, **kwargs):
         clone = self._clone()
         if table_as in self.model.field_list:
             raise TypeError("'%s' is an field for model '%s'" % (table_as, self.model.__name__))
         elif table_as in clone.query.join_as:
             raise TypeError("alias '%s' is already exists" % table_as)
 
-        clone.query.join_as[table_as] = {'join_model': on, 'join_on': []}
-        key_list, _ = ModelCheck(self.model, clone.query.join_as).field_wash(kwargs.keys())
-        values_list, _ = ModelCheck(on, clone.query.join_as).field_wash(kwargs.values())
+        clone.query.join_as[table_as] = {'join_model': join_model, 'join_on': []}
+        _, wash_kwargs = ModelCheck(self.query).field_wash(fields_list=[], fields_dict=kwargs)
         clone.query.join_as[table_as] = clone.query.where.join_as[table_as] = \
-            {'join_model': on, 'join_on': tuple(zip(key_list, values_list))}
+            {'join_model': join_model, 'join_on': tuple(wash_kwargs.items())}
         return clone
 
     # sql查询基础函数
@@ -728,9 +727,11 @@ class ValuesListQuerySet(QuerySet):
 
 
 class ModelCheck:
-    def __init__(self, model, join_as=None):
-        self.model = model
-        self.join_as = join_as or {}
+    def __init__(self, query_where):
+        if query_where and not isinstance(query_where, (Query, WhereNode)):
+            raise TypeError(query_where)
+        self.model = query_where.model
+        self.join_as = query_where.join_as
 
     def field_wash(self, fields_list, fields_dict=None):
         temp_list = []
