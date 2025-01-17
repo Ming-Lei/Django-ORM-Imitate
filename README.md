@@ -160,7 +160,7 @@ Join
 
 ```python
 
-join_filter = TestModel.objects.join(on=TestForeignModel, table_as='tfm', a='a').filter(b__gte=2, tfm__c__lte=10, 
+join_filter = TestModel.objects.join(TestForeignModel, table_as='tfm', a='tfm__a').filter(b__gte=2, tfm__c__lte=10, 
                                                                                         pk__lte=F('tfm__id'))[:10]
 print(join_filter.query)
 for obj in join_filter:
