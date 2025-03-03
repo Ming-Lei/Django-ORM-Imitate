@@ -417,9 +417,9 @@ class Query:
                 field_list.extend(join_field)
 
             # 聚合查询
-            for k, v in self.annotates.items():
-                field_list.append('%s as %s' % (v.sql_expr(field_info), k))
             select_field = ', '.join(field_list)
+            for k, v in self.annotates.items():
+                select_field = select_field.replace(k, '%s as %s' % (v.sql_expr(field_info), k))
             subquery = 'select %s %s from %s %s' % (
                 'distinct' if self.distinct else '', select_field, table_info, where_expr)
             if method == 'count' and (self.distinct or limit):
@@ -535,7 +535,7 @@ class QuerySet(object):
     def annotate(self, **kwargs):
         ModelCheck(self.query).field_wash([x.field for x in kwargs.values()])
         self.query.annotates.update(kwargs)
-        return self._clone(ValuesQuerySet, self.query.group_by)
+        return self._clone(ValuesQuerySet, self.query.group_by + list(self.query.annotates.keys()))
 
     # distinct
     def distinct(self, *field_names):
@@ -678,7 +678,7 @@ class QuerySet(object):
 class ValuesQuerySet(QuerySet):
     def __init__(self, *args, **kwargs):
         super(ValuesQuerySet, self).__init__(*args, **kwargs)
-        self.select_field = self.query.select + list(self.query.annotates.keys())
+        self.select_field = self.query.select
         if not self.select_field:
             self.select_field.extend(x for x in self.model.field_list)
             for table_as, join_info in self.query.join_as.items():
@@ -705,7 +705,6 @@ class ValuesListQuerySet(QuerySet):
         self.select_field = self.query.select[:]
         if self.flat and len(self.select_field) != 1:
             raise TypeError('flat is not valid when values_list is called with more than one field.')
-        self.select_field += list(self.query.annotates.keys())
 
     def __iter__(self):
         self.select()
@@ -732,6 +731,7 @@ class ModelCheck:
             raise TypeError(query_where)
         self.model = query_where.model
         self.join_as = query_where.join_as
+        self.annotates = getattr(query_where, 'annotates', {})
 
     def field_wash(self, fields_list, fields_dict=None):
         temp_list = []
@@ -745,9 +745,9 @@ class ModelCheck:
             else:
                 join_as, temp_model = '', self.model
             field_obj = temp_model.attrs.get(field, None)
-            if not field_obj:
+            if not field_obj and field not in self.annotates:
                 raise TypeError('Cannot resolve keyword %s into field.' % field)
-            temp_list.append(minus + join_as + field_obj.name)
+            temp_list.append(minus + join_as + getattr(field_obj, 'name', field))
 
         temp_dict = {}
         if fields_dict:
@@ -765,6 +765,7 @@ class ModelCheck:
 
     def field_info(self, field_name):
         if '__' not in field_name:
+            if field_name in self.annotates:return field_name
             return self.model.field_info(field_name)
         else:
             temp_as, field = field_name.split('__')
