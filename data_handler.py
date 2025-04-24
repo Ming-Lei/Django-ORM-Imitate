@@ -417,9 +417,11 @@ class Query:
                 field_list.extend(join_field)
 
             # 聚合查询
-            select_field = ', '.join(field_list)
             for k, v in self.annotates.items():
-                select_field = select_field.replace(k, '%s as %s' % (v.sql_expr(field_info), k))
+                if k in field_list:
+                    k_index = field_list.index(k)
+                    field_list[k_index] = '%s as %s' % (v.sql_expr(field_info), k)
+            select_field = ', '.join(field_list)
             subquery = 'select %s %s from %s %s' % (
                 'distinct' if self.distinct else '', select_field, table_info, where_expr)
             if method == 'count' and (self.distinct or limit):
